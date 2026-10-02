@@ -165,3 +165,13 @@ func TestKebabCase(t *testing.T) {
 		t.Errorf("kebab = %q", got)
 	}
 }
+
+func TestFurigana(t *testing.T) {
+	terms := [][]japanese.Segment{{{Text: "「"}}, {{Text: "寿司", Reading: "すし"}}, {{Text: "を"}}, {{Text: "食", Reading: "た"}, {Text: "べた"}}}
+	if got, want := FuriganaHTML(terms, "", ""), `<span class="term">「</span><span class="term"><ruby>寿司<rt>すし</rt></ruby></span><span class="term">を</span><span class="term"><ruby>食<rt>た</rt></ruby>べた</span>`; got != want {
+		t.Errorf("html = %s", got)
+	}
+	if got, want := FuriganaPlain(terms, "寿司", "おすし"), "「 寿司[おすし]を 食[た]べた"; got != want {
+		t.Errorf("plain = %s", got)
+	}
+}

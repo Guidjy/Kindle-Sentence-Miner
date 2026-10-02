@@ -18,8 +18,8 @@ import (
 type Lookup struct {
 	ID        string
 	Timestamp int64  // unix milliseconds
-	Word      string // surface form as it appeared in the book
-	Stem      string // dictionary form chosen by the Kindle
+	Lemma     string // dictionary form chosen by the Kindle (WORDS.word)
+	Surface   string // the word as tokenized in the book (WORDS.stem); often inflected
 	Lang      string
 	Usage     string // the sentence the word was looked up in
 	BookTitle string
@@ -85,11 +85,11 @@ func ReadLookups(dbPath string, since int64, langs []string) ([]Lookup, error) {
 	var out []Lookup
 	for rows.Next() {
 		var l Lookup
-		if err := rows.Scan(&l.ID, &l.Timestamp, &l.Word, &l.Stem, &l.Lang, &l.Usage, &l.BookTitle); err != nil {
+		if err := rows.Scan(&l.ID, &l.Timestamp, &l.Lemma, &l.Surface, &l.Lang, &l.Usage, &l.BookTitle); err != nil {
 			return nil, err
 		}
-		if l.Stem == "" {
-			l.Stem = l.Word
+		if l.Surface == "" {
+			l.Surface = l.Lemma
 		}
 		out = append(out, l)
 	}

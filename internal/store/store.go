@@ -194,3 +194,12 @@ func (s *Store) Media(dictID int64, path string) (content []byte, mediaType stri
 		dictID, path).Scan(&content, &mediaType)
 	return content, mediaType, err
 }
+
+// Incomplete reports whether dictionary data from an older version of the
+// collection importer is present: rows of outbound-key tables were stored
+// under an empty dictionary title. The collection must be re-imported.
+func (s *Store) Incomplete() (bool, error) {
+	var bad bool
+	err := s.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM dictionaries WHERE title = '')`).Scan(&bad)
+	return bad, err
+}

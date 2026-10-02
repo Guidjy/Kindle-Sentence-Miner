@@ -145,10 +145,15 @@ type Entry struct {
 	DictionaryIndex           int
 	SourceTermExactMatchCount int
 	MaxOriginalTextLength     int
-	Headwords                 []*Headword
-	Definitions               []*Definition
-	Pronunciations            []*Pronunciation
-	Frequencies               []*Frequency
+	// TextProcessorChains and InflectionChains are the candidate chains of
+	// text processors and inflection rules (transform ids) that led from the
+	// scanned text to the headword.
+	TextProcessorChains [][]string
+	InflectionChains    [][]string
+	Headwords           []*Headword
+	Definitions         []*Definition
+	Pronunciations      []*Pronunciation
+	Frequencies         []*Frequency
 }
 
 // PrimarySource returns the first primary source of any headword.

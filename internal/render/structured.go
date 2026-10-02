@@ -2,6 +2,7 @@ package render
 
 import (
 	"encoding/json"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,8 @@ type MediaResolver func(dictionary, path string) (fileName string, ok bool)
 type structuredContentGenerator struct {
 	media MediaResolver
 }
+
+var invalidDatasetKey = regexp.MustCompile(`-[a-z]`)
 
 func jsNumber(f float64) string {
 	return strconv.FormatFloat(f, 'f', -1, 64)
@@ -113,6 +116,11 @@ func (g *structuredContentGenerator) createElement(el scElement, dictionary, lan
 		key := kv.key
 		if key != "" {
 			key = strings.ToUpper(key[:1]) + key[1:]
+		}
+		// The browser rejects dataset names with "-" followed by a lowercase
+		// letter (e.g. "sentence-key"); Yomitan ignores the error.
+		if invalidDatasetKey.MatchString(key) {
+			continue
 		}
 		n.setData("sc"+key, jsValueString(kv.value))
 	}

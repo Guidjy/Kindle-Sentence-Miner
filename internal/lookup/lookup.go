@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/xythh/ann2html/internal/deinflect"
 	"github.com/xythh/ann2html/internal/japanese"
 	"github.com/xythh/ann2html/internal/store"
 	"github.com/xythh/ann2html/internal/yomitan/settings"
@@ -23,6 +24,7 @@ type Options struct {
 	MainDictionary               string
 	SortFrequencyDictionary      string
 	SortFrequencyDictionaryOrder string
+	ScanLength                   int // maximum characters scanned by FindAt
 }
 
 // OptionsFromProfile extracts lookup options from a Yomitan profile.
@@ -38,6 +40,7 @@ func OptionsFromProfile(p *settings.Profile) Options {
 		MainDictionary:               g.MainDictionary,
 		SortFrequencyDictionary:      g.SortFrequencyDictionary,
 		SortFrequencyDictionaryOrder: g.SortFrequencyDictionaryOrder,
+		ScanLength:                   p.Options.Scanning.ScanLength(),
 	}
 }
 
@@ -50,22 +53,30 @@ type DictionaryInfo struct {
 	Styles        string
 	FrequencyMode string
 	Secondary     bool
+	POSFilter     bool // deinflections must match the entry's part of speech
 }
 
 // Lookup searches the imported dictionaries.
 type Lookup struct {
-	st      *store.Store
-	opts    Options
-	byTitle map[string]*DictionaryInfo
-	byID    map[int64]*DictionaryInfo
-	idList  string // comma separated ids for SQL IN clauses
-	missing []string
-	tags    map[string]Tag // tag bank cache, keyed by dictionary + "\x00" + name
+	st         *store.Store
+	opts       Options
+	deinflect  *deinflect.Deinflector
+	byTitle    map[string]*DictionaryInfo
+	byID       map[int64]*DictionaryInfo
+	idList     string // comma separated ids for SQL IN clauses
+	missing    []string
+	tags       map[string]Tag // tag bank cache, keyed by dictionary + "\x00" + name
+	conditions map[string]int // part of speech condition flags, keyed by rules
 }
 
-// New prepares a lookup over the enabled dictionaries of a profile.
-func New(st *store.Store, opts Options) (*Lookup, error) {
-	l := &Lookup{st: st, opts: opts, byTitle: map[string]*DictionaryInfo{}, byID: map[int64]*DictionaryInfo{}, tags: map[string]Tag{}}
+// New prepares a lookup over the enabled dictionaries of a profile. d may be
+// nil, in which case FindAt does not deinflect.
+func New(st *store.Store, opts Options, d *deinflect.Deinflector) (*Lookup, error) {
+	l := &Lookup{st: st, opts: opts, deinflect: d, byTitle: map[string]*DictionaryInfo{}, byID: map[int64]*DictionaryInfo{},
+		tags: map[string]Tag{}, conditions: map[string]int{}}
+	if l.opts.ScanLength <= 0 {
+		l.opts.ScanLength = 16
+	}
 	type row struct {
 		id                    int64
 		styles, frequencyMode string
@@ -98,7 +109,7 @@ func New(st *store.Store, opts Options) (*Lookup, error) {
 			alias = d.Name
 		}
 		info := &DictionaryInfo{ID: r.id, Title: d.Name, Alias: alias, Index: i, Styles: r.styles,
-			FrequencyMode: r.frequencyMode, Secondary: d.AllowSecondarySearches}
+			FrequencyMode: r.frequencyMode, Secondary: d.AllowSecondarySearches, POSFilter: d.FilterPartsOfSpeech()}
 		l.byTitle[d.Name] = info
 		l.byID[r.id] = info
 		ids = append(ids, strconv.FormatInt(r.id, 10))
@@ -116,14 +127,34 @@ func (l *Lookup) Missing() []string { return l.missing }
 // Dictionary returns information about an enabled dictionary.
 func (l *Lookup) Dictionary(title string) *DictionaryInfo { return l.byTitle[title] }
 
-// Find returns the dictionary entries for a Kindle lookup, sorted the way
-// Yomitan would display them (the first one is what Yomitan would mine).
-// stem is the Kindle's dictionary form, surface the text in the book.
-func (l *Lookup) Find(stem, surface string) ([]*Entry, error) {
-	for _, q := range uniqueNonEmpty(stem, surface, japanese.KatakanaToHiragana(stem, true)) {
-		entries, err := l.find(q, surface)
-		if err != nil || len(entries) > 0 {
-			return entries, err
+// RuleNames returns user facing names for inflection rule ids.
+func (l *Lookup) RuleNames(rules []string) []string {
+	if l.deinflect == nil {
+		return rules
+	}
+	return l.deinflect.RuleNames(rules)
+}
+
+// Find looks up exact dictionary forms without deinflection, trying each
+// query in turn. It is the fallback when a word cannot be located in its
+// sentence.
+func (l *Lookup) Find(queries ...string) ([]*Entry, error) {
+	var all []string
+	for _, q := range queries {
+		all = append(all, q, japanese.KatakanaToHiragana(q, true))
+	}
+	for _, q := range uniqueNonEmpty(all...) {
+		terms, err := l.lookupTexts([]string{q})
+		if err != nil {
+			return nil, err
+		}
+		var entries []*Entry
+		for _, t := range terms {
+			src := Source{OriginalText: q, TransformedText: q, DeinflectedText: q, MatchSource: t.matchSource, IsPrimary: true}
+			entries = append(entries, l.entryFromTerm(t, src, nil, nil))
+		}
+		if len(entries) > 0 {
+			return l.finalize(entries)
 		}
 	}
 	return nil, nil
@@ -146,6 +177,7 @@ type dbTerm struct {
 	score, sequence                      int64
 	glossary                             string
 	matchSource                          string
+	matched                              string // the looked up text that matched
 }
 
 func (l *Lookup) queryTerms(where string, args ...any) ([]dbTerm, error) {
@@ -167,38 +199,207 @@ func (l *Lookup) queryTerms(where string, args ...any) ([]dbTerm, error) {
 	return out, rows.Err()
 }
 
-func (l *Lookup) find(query, surface string) ([]*Entry, error) {
-	byTerm, err := l.queryTerms(`expression = ?`, query)
-	if err != nil {
+// lookupTexts finds terms whose expression or reading equals one of texts,
+// like Yomitan's exact findTermsBulk. Results keep the order of texts.
+func (l *Lookup) lookupTexts(texts []string) ([]dbTerm, error) {
+	var out []dbTerm
+	for _, text := range texts {
+		byTerm, err := l.queryTerms(`expression = ?`, text)
+		if err != nil {
+			return nil, err
+		}
+		byReading, err := l.queryTerms(`reading = ? AND expression != ?`, text, text)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range byTerm {
+			t.matchSource, t.matched = "term", text
+			out = append(out, t)
+		}
+		for _, t := range byReading {
+			t.matchSource, t.matched = "reading", text
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+func (l *Lookup) conditionFlags(rules string) int {
+	if v, ok := l.conditions[rules]; ok {
+		return v
+	}
+	v := 0
+	if l.deinflect != nil {
+		v = l.deinflect.ConditionFlags(strings.Fields(rules))
+	}
+	l.conditions[rules] = v
+	return v
+}
+
+type deinflection struct {
+	originalText, transformedText, deinflectedText string
+	conditions                                     int
+	textChains                                     [][]string
+	inflectionChains                               [][]string
+}
+
+// textVariants mirrors the Japanese text preprocessors that matter for book
+// text: the original plus its hiragana and katakana conversions, each with
+// its text processor chain.
+func textVariants(text string) ([]string, [][][]string) {
+	variants := []string{text}
+	chains := [][][]string{{{}}}
+	for _, v := range []struct{ text, id string }{
+		{japanese.KatakanaToHiragana(text, true), "katakanaToHiragana"},
+		{japanese.HiraganaToKatakana(text), "hiraganaToKatakana"},
+	} {
+		if !containsStr(variants, v.text) {
+			variants = append(variants, v.text)
+			chains = append(chains, [][]string{{v.id}})
+		}
+	}
+	return variants, chains
+}
+
+func containsStr(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// FindAt returns the entries Yomitan would show when scanning sentence at
+// rune offset start (Translator.findTerms with deinflection), sorted so the
+// first entry is the one Yomitan would mine.
+func (l *Lookup) FindAt(sentence string, start int) ([]*Entry, error) {
+	entries, err := l.collect(sentence, start)
+	if err != nil || len(entries) == 0 {
 		return nil, err
 	}
-	byReading, err := l.queryTerms(`reading = ? AND expression != ?`, query, query)
-	if err != nil {
-		return nil, err
-	}
-	for i := range byTerm {
-		byTerm[i].matchSource = "term"
-	}
-	for i := range byReading {
-		byReading[i].matchSource = "reading"
-	}
-	all := append(byTerm, byReading...)
-	if len(all) == 0 {
+	return l.finalize(entries)
+}
+
+// collect builds the ungrouped entries for a scan at start, like
+// Translator._findTermsInternal.
+func (l *Lookup) collect(sentence string, start int) ([]*Entry, error) {
+	runes := []rune(sentence)
+	if start < 0 || start >= len(runes) {
 		return nil, nil
 	}
-	var entries []*Entry
-	for _, t := range all {
-		entries = append(entries, l.entryFromTerm(t, surface, query, true))
+	text := runes[start:min(len(runes), start+l.opts.ScanLength)]
+
+	var deinflections []deinflection
+	for n := len(text); n > 0; n-- {
+		raw := string(text[:n])
+		variants, chains := textVariants(raw)
+		for i, v := range variants {
+			results := []deinflect.Result{{Text: v}}
+			if l.deinflect != nil {
+				var err error
+				if results, err = l.deinflect.Transform(v); err != nil {
+					return nil, err
+				}
+			}
+			for _, r := range results {
+				deinflections = append(deinflections, deinflection{
+					originalText: raw, transformedText: v, deinflectedText: r.Text, conditions: r.Conditions,
+					textChains: chains[i], inflectionChains: [][]string{r.Rules},
+				})
+			}
+		}
 	}
 
+	var unique []string
+	byText := map[string][]int{}
+	for i, d := range deinflections {
+		if _, ok := byText[d.deinflectedText]; !ok {
+			unique = append(unique, d.deinflectedText)
+		}
+		byText[d.deinflectedText] = append(byText[d.deinflectedText], i)
+	}
+	terms, err := l.lookupTexts(unique)
+	if err != nil {
+		return nil, err
+	}
+	matches := make([][]dbTerm, len(deinflections))
+	for _, t := range terms {
+		filter := l.byID[t.dictID].POSFilter
+		flags := l.conditionFlags(t.rules)
+		for _, i := range byText[t.matched] {
+			if !filter || deinflect.ConditionsMatch(deinflections[i].conditions, flags) {
+				matches[i] = append(matches[i], t)
+			}
+		}
+	}
+
+	// Port of Translator._getDictionaryEntries.
+	var entries []*Entry
+	byID := map[int64]int{}
+	for i, d := range deinflections {
+		for _, t := range matches[i] {
+			src := Source{OriginalText: d.originalText, TransformedText: d.transformedText, DeinflectedText: d.deinflectedText,
+				MatchSource: t.matchSource, IsPrimary: true}
+			idx, seen := byID[t.id]
+			if !seen {
+				byID[t.id] = len(entries)
+				entries = append(entries, l.entryFromTerm(t, src, d.textChains, d.inflectionChains))
+				continue
+			}
+			existing := entries[idx]
+			existingTransformed := existing.Headwords[0].Sources[0].TransformedText
+			newLen, oldLen := len([]rune(d.transformedText)), len([]rune(existingTransformed))
+			switch {
+			case newLen < oldLen:
+			case newLen > oldLen:
+				if d.originalText != existingTransformed {
+					entries[idx] = l.entryFromTerm(t, src, d.textChains, d.inflectionChains)
+				}
+			default:
+				existing.InflectionChains = appendUniqueChains(existing.InflectionChains, d.inflectionChains)
+				existing.TextProcessorChains = appendUniqueChains(existing.TextProcessorChains, d.textChains)
+			}
+		}
+	}
+	return entries, nil
+}
+
+func chainKey(c []string) string { return strings.Join(c, "\x00") }
+
+func chainsKey(chains [][]string) string {
+	parts := make([]string, len(chains))
+	for i, c := range chains {
+		parts[i] = chainKey(c)
+	}
+	return strings.Join(parts, "\x01")
+}
+
+func appendUniqueChains(list, items [][]string) [][]string {
+outer:
+	for _, it := range items {
+		for _, existing := range list {
+			if chainKey(existing) == chainKey(it) {
+				continue outer
+			}
+		}
+		list = append(list, it)
+	}
+	return list
+}
+
+// finalize groups entries by the result mode, adds meta data and tags, and
+// sorts everything like Translator.findTerms.
+func (l *Lookup) finalize(entries []*Entry) ([]*Entry, error) {
+	var err error
 	switch l.opts.ResultOutputMode {
 	case "group":
 		entries = l.groupBy(entries, func(e *Entry) string {
 			h := e.Headwords[0]
-			return h.Term + "\x00" + japanese.KatakanaToHiragana(h.Reading, false)
+			return h.Term + "\x00" + japanese.KatakanaToHiragana(h.Reading, false) + "\x00" + chainsKey(e.InflectionChains)
 		})
 	case "term":
-		entries = l.groupBy(entries, func(e *Entry) string { return e.Headwords[0].Term })
+		entries = l.groupBy(entries, func(e *Entry) string { return e.Headwords[0].Term + "\x00" + chainsKey(e.InflectionChains) })
 	case "merge":
 		if entries, err = l.merge(entries); err != nil {
 			return nil, err
@@ -230,14 +431,14 @@ func (l *Lookup) find(query, surface string) ([]*Entry, error) {
 	return entries, nil
 }
 
-func (l *Lookup) entryFromTerm(t dbTerm, originalText, deinflectedText string, isPrimary bool) *Entry {
+func (l *Lookup) entryFromTerm(t dbTerm, src Source, textChains, inflectionChains [][]string) *Entry {
 	info := l.byID[t.dictID]
 	reading := t.reading
 	if reading == "" {
 		reading = t.term
 	}
 	exact := 0
-	if isPrimary && deinflectedText == t.term {
+	if src.IsPrimary && src.DeinflectedText == t.term {
 		exact = 1
 	}
 	var entries []json.RawMessage
@@ -245,7 +446,7 @@ func (l *Lookup) entryFromTerm(t dbTerm, originalText, deinflectedText string, i
 	h := &Headword{
 		Term:        t.term,
 		Reading:     reading,
-		Sources:     []Source{{OriginalText: originalText, TransformedText: originalText, DeinflectedText: deinflectedText, MatchSource: t.matchSource, IsPrimary: isPrimary}},
+		Sources:     []Source{src},
 		WordClasses: strings.Fields(t.rules),
 	}
 	h.tagGroups = addTags(nil, info.Title, strings.Fields(t.tTags))
@@ -261,16 +462,18 @@ func (l *Lookup) entryFromTerm(t dbTerm, originalText, deinflectedText string, i
 		ID:              t.id,
 		Score:           t.score,
 		Sequences:       []int64{seq},
-		IsPrimary:       isPrimary,
+		IsPrimary:       src.IsPrimary,
 		Entries:         entries,
 	}
 	d.tagGroups = addTags(nil, info.Title, strings.Fields(t.defTags))
 	return &Entry{
-		IsPrimary:                 isPrimary,
+		IsPrimary:                 src.IsPrimary,
 		Score:                     t.score,
 		DictionaryIndex:           info.Index,
 		SourceTermExactMatchCount: exact,
-		MaxOriginalTextLength:     len([]rune(originalText)),
+		MaxOriginalTextLength:     len([]rune(src.OriginalText)),
+		TextProcessorChains:       textChains,
+		InflectionChains:          inflectionChains,
 		Headwords:                 []*Headword{h},
 		Definitions:               []*Definition{d},
 	}
@@ -333,7 +536,7 @@ func (l *Lookup) merge(entries []*Entry) ([]*Entry, error) {
 					continue
 				}
 				t.matchSource = "term"
-				g.entries = append(g.entries, l.entryFromTerm(t, t.term, t.term, false))
+				g.entries = append(g.entries, l.entryFromTerm(t, Source{OriginalText: t.term, TransformedText: t.term, DeinflectedText: t.term, MatchSource: "term"}, nil, nil))
 				g.ids[t.id] = true
 				delete(ungroupedIDs, t.id)
 			}
@@ -380,7 +583,7 @@ func (l *Lookup) merge(entries []*Entry) ([]*Entry, error) {
 						continue
 					}
 					t.matchSource = "term"
-					g.entries = append(g.entries, l.entryFromTerm(t, t.term, t.term, false))
+					g.entries = append(g.entries, l.entryFromTerm(t, Source{OriginalText: t.term, TransformedText: t.term, DeinflectedText: t.term, MatchSource: "term"}, nil, nil))
 					g.ids[t.id] = true
 				}
 			}
@@ -442,6 +645,7 @@ func createGroupedEntry(entries []*Entry, checkDuplicates bool) *Entry {
 
 	g := &Entry{Score: math.MinInt64, DictionaryIndex: math.MaxInt32}
 	defsByKey := map[string]*Definition{}
+	hasInflections := false
 	for _, de := range defEntries {
 		e := de.entry
 		if e.Score > g.Score {
@@ -455,6 +659,13 @@ func createGroupedEntry(entries []*Entry, checkDuplicates bool) *Entry {
 			if e.MaxOriginalTextLength > g.MaxOriginalTextLength {
 				g.MaxOriginalTextLength = e.MaxOriginalTextLength
 			}
+			if !hasInflections || len(e.InflectionChains) < len(g.InflectionChains) {
+				g.InflectionChains = e.InflectionChains
+			}
+			if !hasInflections || len(e.TextProcessorChains) < len(g.TextProcessorChains) {
+				g.TextProcessorChains = e.TextProcessorChains
+			}
+			hasInflections = true
 		}
 		for _, d := range e.Definitions {
 			var hwIdx []int
@@ -916,6 +1127,12 @@ func sortEntries(entries []*Entry) {
 		if v1.MaxOriginalTextLength != v2.MaxOriginalTextLength {
 			return v1.MaxOriginalTextLength > v2.MaxOriginalTextLength
 		}
+		if c1, c2 := shortestChain(v1.TextProcessorChains), shortestChain(v2.TextProcessorChains); c1 != c2 {
+			return c1 < c2
+		}
+		if c1, c2 := shortestChain(v1.InflectionChains), shortestChain(v2.InflectionChains); c1 != c2 {
+			return c1 < c2
+		}
 		if v1.SourceTermExactMatchCount != v2.SourceTermExactMatchCount {
 			return v1.SourceTermExactMatchCount > v2.SourceTermExactMatchCount
 		}
@@ -939,6 +1156,18 @@ func sortEntries(entries []*Entry) {
 		}
 		return len(v1.Definitions) > len(v2.Definitions)
 	})
+}
+
+// shortestChain is the length of the shortest candidate chain (0 if none).
+func shortestChain(chains [][]string) int {
+	if len(chains) == 0 {
+		return 0
+	}
+	n := math.MaxInt32
+	for _, c := range chains {
+		n = min(n, len(c))
+	}
+	return n
 }
 
 func sortDefinitions(defs []*Definition) {
@@ -973,4 +1202,44 @@ func simpleLess(h1, d1, i1, h2, d2, i2 int) bool {
 		return d1 < d2
 	}
 	return i1 < i2
+}
+
+// ParseText splits text into terms with furigana the way Yomitan's
+// scanning parser does (Backend._textParseScanning): at each position the
+// longest dictionary match is taken, and runs of unmatched characters are
+// grouped together.
+func (l *Lookup) ParseText(text string) ([][]japanese.Segment, error) {
+	runes := []rune(text)
+	var results [][]japanese.Segment
+	ungrouped := -1
+	for i := 0; i < len(runes); {
+		ch := runes[i]
+		entries, err := l.collect(text, i)
+		if err != nil {
+			return nil, err
+		}
+		length := 0
+		for _, e := range entries {
+			length = max(length, e.MaxOriginalTextLength)
+		}
+		if len(entries) > 0 && length > 0 && (length != 1 || japanese.IsCodePointJapanese(ch)) {
+			sortEntries(entries)
+			h := entries[0].Headwords[0]
+			segments := japanese.DistributeFuriganaInflected(h.Term, h.Reading, string(runes[i:i+length]))
+			if len(segments) > 0 {
+				results = append(results, segments)
+				ungrouped = -1
+				i += length
+				continue
+			}
+		}
+		if ungrouped < 0 {
+			results = append(results, []japanese.Segment{{Text: string(ch)}})
+			ungrouped = len(results) - 1
+		} else {
+			results[ungrouped][0].Text += string(ch)
+		}
+		i++
+	}
+	return results, nil
 }

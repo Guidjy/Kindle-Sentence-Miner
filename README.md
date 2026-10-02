@@ -9,10 +9,14 @@ sources and duplicate rules, so they look like cards you mined by hand with Yomi
 * Reads your Kindle's `vocab.db` (Vocabulary Builder) and only mines lookups made since the last run.
 * Imports your Yomitan settings export and your dictionaries (the "dictionary collection" export, or
   individual Yomitan dictionary `.zip` files) into a local SQLite database indexed for fast lookups.
-* Looks words up the way Yomitan does: enabled dictionaries in profile order, the profile's result
-  grouping mode (group / split / merge / term), tags, frequencies and pitch accents.
+* Looks words up the way Yomitan does when you hover them: it finds the word in its sentence, scans
+  from there with Yomitan's own deinflection rules (run in an embedded JavaScript engine), and uses
+  the enabled dictionaries in profile order, the profile's result grouping mode (group / split /
+  merge / term), tags, frequencies and pitch accents. Inflected words (e.g. いたわって) are
+  highlighted in the sentence.
 * Renders every field with Yomitan's default Anki marker output (`{glossary}`, `{furigana}`,
-  `{cloze-body}`, `{pitch-accents}`, `{frequencies}`, `{audio}`, per-dictionary `{single-glossary-…}`…),
+  `{cloze-body}`, `{sentence-furigana}`, `{conjugation}`, `{pitch-accents}`, `{frequencies}`, `{audio}`,
+  per-dictionary `{single-glossary-…}`…),
   including structured-content dictionaries, dictionary styles and dictionary images.
 * Downloads audio from the profile's audio sources (JapanesePod101, custom URL, custom JSON / local
   audio server, Jisho, LanguagePod101, Lingua Libre, Wiktionary).
@@ -40,7 +44,10 @@ Run `ann2html` and work through the window from top to bottom:
    Windows hides this folder in an odd way; if you can't find it, search the Kindle drive for
    `vocab.db`.
 2. **Import settings** (once, or again after changing Yomitan) and pick the profile to use.
-3. **Import dictionaries** (once). A full collection export can take a few minutes.
+3. **Import dictionaries** (once). A full collection export can take a few minutes. Importing a
+   collection replaces all previously imported dictionaries. If you imported dictionaries with an
+   earlier version of this app, re-import the collection (the window shows a warning): earlier
+   versions lost pitch accents, frequencies and dictionary styles from recent Yomitan exports.
 4. Set the **languages** to mine (comma separated ISO 639 codes, e.g. `ja` or `ja,en`) and click
    **Mine cards**. The window shows how many lookups were found, added, already in Anki, without a
    definition, or failed.
@@ -60,8 +67,9 @@ executable.
   templates are used, and the app warns you if your profile has customized ones.
 * Text-to-speech audio sources and the `{pitch-accent-graphs-jj}`, `{screenshot}` and clipboard markers
   are not supported.
-* The Kindle already stores the dictionary form of each word, so no deinflection is done. If no
-  dictionary has that form, the word is reported as "No definition".
+* The card uses the word Yomitan would show at the spot the Kindle lookup points to. If you selected
+  text starting with a particle on the Kindle (e.g. の杞憂), the particle is mined, just as hovering
+  there in Yomitan would.
 * The duplicate behavior is always "prevent": existing notes are never overwritten.
 
 ### Linux script

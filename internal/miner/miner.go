@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/xythh/ann2html/internal/anki"
 	"github.com/xythh/ann2html/internal/audio"
+	"github.com/xythh/ann2html/internal/deinflect"
+	"github.com/xythh/ann2html/internal/japanese"
 	"github.com/xythh/ann2html/internal/kindle"
 	"github.com/xythh/ann2html/internal/lookup"
 	"github.com/xythh/ann2html/internal/render"
@@ -42,13 +45,14 @@ type Status struct {
 }
 
 type run struct {
-	cfg      Config
-	format   *settings.CardFormat
-	profile  *settings.Profile
-	client   *anki.Client
-	lookup   *lookup.Lookup
-	audio    *audio.Downloader
-	renderer render.Options
+	cfg        Config
+	format     *settings.CardFormat
+	profile    *settings.Profile
+	client     *anki.Client
+	lookup     *lookup.Lookup
+	audio      *audio.Downloader
+	renderer   render.Options
+	scanLength int
 
 	mu       sync.Mutex
 	status   Status
@@ -56,6 +60,10 @@ type run struct {
 	media    map[string]string // dictionary + "\x00" + path -> Anki file name ("" = unavailable)
 	sounds   map[string]string // term + "\x00" + reading -> Anki file name ("" = none)
 	inflight map[string]*sync.WaitGroup
+
+	// lookupMu guards lookup, which workers use to parse sentences.
+	lookupMu sync.Mutex
+	furigana map[string][][]japanese.Segment
 }
 
 func (r *run) update(fn func(s *Status)) {
@@ -77,7 +85,7 @@ func (r *run) logf(format string, args ...any) {
 // Run mines new lookups. report is called with a status snapshot after every
 // change and may be nil.
 func Run(ctx context.Context, cfg Config, report func(Status)) (Status, error) {
-	r := &run{cfg: cfg, report: report, media: map[string]string{}, sounds: map[string]string{}, inflight: map[string]*sync.WaitGroup{}}
+	r := &run{cfg: cfg, report: report, media: map[string]string{}, sounds: map[string]string{}, inflight: map[string]*sync.WaitGroup{}, furigana: map[string][][]japanese.Segment{}}
 	err := r.run(ctx)
 	if err != nil {
 		r.logf("Error: %v", err)
@@ -154,7 +162,12 @@ func (r *run) run(ctx context.Context) error {
 		return nil
 	}
 
-	r.lookup, err = lookup.New(cfg.Store, lookup.OptionsFromProfile(r.profile))
+	deinflector, err := deinflect.New()
+	if err != nil {
+		return err
+	}
+	r.scanLength = opts.Scanning.ScanLength()
+	r.lookup, err = lookup.New(cfg.Store, lookup.OptionsFromProfile(r.profile), deinflector)
 	if err != nil {
 		return err
 	}
@@ -201,18 +214,18 @@ func (r *run) run(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		entries, err := r.lookup.Find(lk.Stem, lk.Word)
+		entries, start, err := r.findEntries(lk)
 		if err != nil {
 			return err
 		}
 		if len(entries) == 0 {
 			handled(lk.Timestamp)
-			r.logf("No definition: %s", lk.Stem)
+			r.logf("No definition: %s", lk.Lemma)
 			r.update(func(s *Status) { s.NoDefinition++; s.Processed++ })
 			continue
 		}
 		c := &candidate{lk: lk, entry: entries[0]}
-		c.note = r.newNote(lk, c.entry)
+		c.note = r.newNote(lk, c.entry, start)
 		c.firstVal = c.note.Field(format.Fields[0].Value)
 		if seen[c.firstVal] {
 			handled(lk.Timestamp)
@@ -347,7 +360,7 @@ func (r *run) addNote(ctx context.Context, c *candidate) bool {
 			r.update(func(s *Status) { s.Duplicates++; s.Processed++ })
 			return true
 		}
-		r.logf("Failed to add %s: %v", c.lk.Stem, err)
+		r.logf("Failed to add %s: %v", c.lk.Lemma, err)
 		r.update(func(s *Status) { s.Failed++; s.Processed++ })
 		return false
 	}
@@ -356,21 +369,64 @@ func (r *run) addNote(ctx context.Context, c *candidate) bool {
 	return true
 }
 
-func (r *run) newNote(lk kindle.Lookup, e *lookup.Entry) *render.Note {
-	sentence := []rune(lk.Usage)
-	offset, original := -1, ""
-	for _, candidate := range []string{lk.Word, lk.Stem} {
-		if candidate == "" {
-			continue
+// wordStart finds where the looked up word appears in its sentence (rune
+// offset), or -1. The Kindle's word (the dictionary form, or the whole
+// selection when several words were selected) pins the exact spot when it
+// appears verbatim; otherwise the surface form, else the longest prefix of
+// the dictionary form (inflected words share their stem with it).
+func wordStart(lk kindle.Lookup) int {
+	runeIndex := func(s string) int {
+		if s == "" {
+			return -1
 		}
-		if i := strings.Index(lk.Usage, candidate); i >= 0 {
-			offset = len([]rune(lk.Usage[:i]))
-			original = candidate
-			break
+		if i := strings.Index(lk.Usage, s); i >= 0 {
+			return utf8.RuneCountInString(lk.Usage[:i])
+		}
+		return -1
+	}
+	for _, s := range []string{lk.Lemma, lk.Surface} {
+		if i := runeIndex(s); i >= 0 {
+			return i
 		}
 	}
-	if offset < 0 {
-		offset = len(sentence)
+	lemma := []rune(lk.Lemma)
+	for n := len(lemma) - 1; n >= 1; n-- {
+		if n == 1 && !japanese.IsCodePointKanji(lemma[0]) {
+			break
+		}
+		if i := runeIndex(string(lemma[:n])); i >= 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+// findEntries returns Yomitan's entries for the word at its position in the
+// sentence, falling back to an exact lookup of the Kindle's forms. start is
+// -1 when the word could not be located.
+func (r *run) findEntries(lk kindle.Lookup) ([]*lookup.Entry, int, error) {
+	if start := wordStart(lk); start >= 0 {
+		entries, err := r.lookup.FindAt(lk.Usage, start)
+		if err != nil || len(entries) > 0 {
+			return entries, start, err
+		}
+	}
+	entries, err := r.lookup.Find(lk.Lemma, lk.Surface)
+	return entries, -1, err
+}
+
+func (r *run) newNote(lk kindle.Lookup, e *lookup.Entry, start int) *render.Note {
+	sentence := []rune(lk.Usage)
+	offset, original := len(sentence), ""
+	if start >= 0 {
+		offset = start
+		if src := e.PrimarySource(); src != nil {
+			original = src.OriginalText
+		}
+	}
+	query := string(sentence[min(offset, len(sentence)):min(len(sentence), offset+r.scanLength)])
+	if start < 0 {
+		query = lk.Surface
 	}
 	term, reading := noteHeadword(e)
 	return &render.Note{
@@ -380,12 +436,39 @@ func (r *run) newNote(lk kindle.Lookup, e *lookup.Entry) *render.Note {
 			SentenceOffset: offset,
 			OriginalText:   original,
 			DocumentTitle:  lk.BookTitle,
-			FullQuery:      lk.Word,
+			FullQuery:      query,
 		},
-		Options: r.renderer,
-		Media:   r.dictionaryMedia,
-		Audio:   func() (string, bool) { return r.termAudio(term, reading) },
+		Options:   r.renderer,
+		Media:     r.dictionaryMedia,
+		Audio:     func() (string, bool) { return r.termAudio(term, reading) },
+		RuleNames: r.lookup.RuleNames,
+		SentenceFurigana: func(plain bool) (string, bool) {
+			terms, ok := r.parseSentence(lk.Usage)
+			if !ok {
+				return "", false
+			}
+			if plain {
+				return render.FuriganaPlain(terms, term, reading), true
+			}
+			return render.FuriganaHTML(terms, term, reading), true
+		},
 	}
+}
+
+// parseSentence splits a sentence into terms with furigana, once per sentence.
+func (r *run) parseSentence(sentence string) ([][]japanese.Segment, bool) {
+	r.lookupMu.Lock()
+	defer r.lookupMu.Unlock()
+	if terms, ok := r.furigana[sentence]; ok {
+		return terms, terms != nil
+	}
+	terms, err := r.lookup.ParseText(sentence)
+	if err != nil {
+		r.logf("Could not add furigana to a sentence: %v", err)
+		terms = nil
+	}
+	r.furigana[sentence] = terms
+	return terms, terms != nil
 }
 
 // noteHeadword picks the headword whose audio Yomitan would attach

@@ -446,3 +446,7 @@ func GetPitchCategory(text string, p Pitch, isVerbOrAdjective bool) string {
 	}
 	return ""
 }
+
+// IsCodePointJapanese reports whether c is a Japanese character (kana,
+// kanji, Japanese punctuation or full width characters).
+func IsCodePointJapanese(c rune) bool { return inRanges(c, japaneseRanges) }

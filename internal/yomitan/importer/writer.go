@@ -260,3 +260,13 @@ func (w *writer) addMedia(m mediaRow) error {
 	}
 	return w.tick()
 }
+
+// clearAll removes every imported dictionary.
+func (w *writer) clearAll() error {
+	for _, table := range []string{"terms", "term_meta", "tag_meta", "media", "dictionaries"} {
+		if _, err := w.tx.Exec(`DELETE FROM ` + table); err != nil {
+			return err
+		}
+	}
+	return nil
+}

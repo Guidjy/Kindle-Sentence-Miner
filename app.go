@@ -29,6 +29,7 @@ type App struct {
 	languages string
 	rescanAll bool
 	dicts     []store.DictionaryInfo
+	stale     bool // dictionary data needs to be re-imported
 
 	busy         string // description of the running task, "" when idle
 	progress     float32
@@ -108,8 +109,9 @@ func (a *App) refreshDictionaries() {
 		a.logf("Error reading dictionaries: %v", err)
 		return
 	}
+	stale, _ := a.st.Incomplete()
 	a.mu.Lock()
-	a.dicts = dicts
+	a.dicts, a.stale = dicts, stale
 	a.mu.Unlock()
 }
 
@@ -152,6 +154,9 @@ func (a *App) Snapshot() Snapshot {
 		if len(missing) > 0 {
 			s.Warnings = append(s.Warnings, "Not imported yet: "+strings.Join(missing, ", "))
 		}
+	}
+	if a.stale {
+		s.Warnings = append(s.Warnings, "Dictionary data is incomplete (pitch accents, frequencies and styles are missing). Re-import your dictionary collection.")
 	}
 	for _, d := range a.dicts {
 		line := fmt.Sprintf("%s  (%d terms)", d.Title, d.Terms)

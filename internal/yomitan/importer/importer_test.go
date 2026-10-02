@@ -103,10 +103,10 @@ func TestImportCollection(t *testing.T) {
 	 {"tableName":"terms","inbound":true,"rows":[
 	  {"expression":"猫","reading":"ねこ","definitionTags":"n","rules":"","score":0,"glossary":["cat"],"sequence":7,"termTags":"","dictionary":"D1","id":1}
 	 ]},
-	 {"tableName":"kanji","inbound":true,"rows":[{"character":"猫","dictionary":"D1"}]},
-	 {"tableName":"dictionaries","inbound":true,"rows":[{"title":"D1","revision":"r","version":3,"sequenced":true,"styles":"s"}]},
-	 {"tableName":"termMeta","inbound":true,"rows":[{"expression":"猫","mode":"pitch","data":{"reading":"ねこ","pitches":[{"position":1}]},"dictionary":"D1"}]},
-	 {"tableName":"tagMeta","inbound":true,"rows":[{"name":"n","category":"partOfSpeech","order":0,"notes":"noun","score":0,"dictionary":"D1"}]},
+	 {"tableName":"kanji","inbound":false,"rows":[{"$":[1,{"character":"猫","dictionary":"D1"}],"$types":{"$":{"":"arrayNonindexKeys"}}}]},
+	 {"tableName":"dictionaries","inbound":false,"rows":[{"$":[1,{"title":"D1","revision":"r","version":3,"sequenced":true,"styles":"s"}],"$types":{"$":{"":"arrayNonindexKeys"}}}]},
+	 {"tableName":"termMeta","inbound":false,"rows":[{"$":[1,{"expression":"猫","mode":"pitch","data":{"reading":"ねこ","pitches":[{"position":1}]},"dictionary":"D1"}],"$types":{"$":{"":"arrayNonindexKeys","1.data.pitches":"arrayNonindexKeys"}}},{"$":[2,{"expression":"猫","mode":"freq","data":{"reading":"ねこ","frequency":{"value":500,"displayValue":"500"}},"dictionary":"D1"}],"$types":{"$":{"":"arrayNonindexKeys"}}}]},
+	 {"tableName":"tagMeta","inbound":false,"rows":[{"$":[1,{"name":"n","category":"partOfSpeech","order":0,"notes":"noun","score":0,"dictionary":"D1"}],"$types":{"$":{"":"arrayNonindexKeys"}}}]},
 	 {"tableName":"media","inbound":true,"rows":[{"dictionary":"D1","path":"a.png","mediaType":"image/png","width":1,"height":1,"content":"UE5H","$types":{"content":"arraybuffer"}}]}
 	]}}`), 0o644)
 	if err := Import(st, p, nil); err != nil {
@@ -127,5 +127,19 @@ func TestImportCollection(t *testing.T) {
 	}
 	if n := count(t, st, `SELECT COUNT(*) FROM tag_meta`); n != 1 {
 		t.Errorf("tags = %d", n)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM term_meta m JOIN dictionaries d ON d.id = m.dict_id WHERE d.title = 'D1' AND m.mode IN ('pitch', 'freq')`); n != 2 {
+		t.Errorf("term meta = %d, want 2", n)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM tag_meta WHERE name = 'n' AND category = 'partOfSpeech'`); n != 1 {
+		t.Errorf("tag not imported")
+	}
+
+	// A collection import replaces dictionaries imported before.
+	if err := Import(st, p, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM dictionaries`); n != 1 {
+		t.Errorf("dictionaries after re-import = %d", n)
 	}
 }

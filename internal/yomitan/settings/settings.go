@@ -31,6 +31,27 @@ type ProfileOptions struct {
 	Dictionaries Dictionaries `json:"dictionaries"`
 	Anki         Anki         `json:"anki"`
 	Audio        Audio        `json:"audio"`
+	Scanning     Scanning     `json:"scanning"`
+	Parsing      Parsing      `json:"parsing"`
+}
+
+type Scanning struct {
+	// Length is the maximum number of characters scanned for a word.
+	Length int `json:"length"`
+}
+
+// ScanLength returns the scan length, defaulting like Yomitan.
+func (s Scanning) ScanLength() int {
+	if s.Length <= 0 {
+		return 16
+	}
+	return s.Length
+}
+
+type Parsing struct {
+	// ReadingMode is how furigana is shown for parsed text: hiragana,
+	// katakana, romaji, dictionary-reading or none.
+	ReadingMode string `json:"readingMode"`
 }
 
 type General struct {
@@ -49,6 +70,13 @@ type Dictionary struct {
 	Enabled                bool   `json:"enabled"`
 	Priority               int    `json:"priority"`
 	AllowSecondarySearches bool   `json:"allowSecondarySearches"`
+	PartsOfSpeechFilter    *bool  `json:"partsOfSpeechFilter"`
+}
+
+// FilterPartsOfSpeech reports whether deinflections must match the entry's
+// part of speech (Yomitan's default).
+func (d Dictionary) FilterPartsOfSpeech() bool {
+	return d.PartsOfSpeechFilter == nil || *d.PartsOfSpeechFilter
 }
 
 // DisplayName is the alias if set, otherwise the dictionary title.

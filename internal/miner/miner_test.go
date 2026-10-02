@@ -116,8 +116,8 @@ func fixture(t *testing.T) (dir string, st *store.Store) {
 	CREATE TABLE WORDS (id TEXT PRIMARY KEY, word TEXT, stem TEXT, lang TEXT, category INTEGER, timestamp INTEGER, profileid TEXT);
 	CREATE TABLE LOOKUPS (id TEXT PRIMARY KEY, word_key TEXT, book_key TEXT, dict_key TEXT, pos TEXT, usage TEXT, timestamp INTEGER);
 	CREATE TABLE BOOK_INFO (id TEXT PRIMARY KEY, asin TEXT, guid TEXT, lang TEXT, title TEXT, authors TEXT);
-	INSERT INTO WORDS VALUES ('ja:食べる','食べた','食べる','ja',0,0,''), ('ja:猫','猫','猫','ja',0,0,''),
-	                         ('ja:本','本','本','ja',0,0,''), ('ja:無','無','無い語','ja',0,0,'');
+	INSERT INTO WORDS VALUES ('ja:食べる','食べる','食べた','ja',0,0,''), ('ja:猫','猫','猫','ja',0,0,''),
+	                         ('ja:本','本','本','ja',0,0,''), ('ja:無','無い語','無','ja',0,0,'');
 	INSERT INTO BOOK_INFO VALUES ('b','','','ja','Book','');
 	INSERT INTO LOOKUPS VALUES ('1','ja:食べる','b','','','寿司を食べた。',10), ('2','ja:食べる','b','','','また食べた。',20),
 	                           ('3','ja:猫','b','','','猫がいる。',30), ('4','ja:無','b','','','無',40), ('5','ja:本','b','','','本を読む。',50);`)

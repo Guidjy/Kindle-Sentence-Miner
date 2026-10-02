@@ -16,7 +16,7 @@ func TestReadLookups(t *testing.T) {
 	CREATE TABLE WORDS (id TEXT PRIMARY KEY NOT NULL UNIQUE, word TEXT, stem TEXT, lang TEXT, category INTEGER DEFAULT 0, timestamp INTEGER DEFAULT 0, profileid TEXT);
 	CREATE TABLE LOOKUPS (id TEXT PRIMARY KEY NOT NULL, word_key TEXT, book_key TEXT, dict_key TEXT, pos TEXT, usage TEXT, timestamp INTEGER DEFAULT 0);
 	CREATE TABLE BOOK_INFO (id TEXT PRIMARY KEY NOT NULL, asin TEXT, guid TEXT, lang TEXT, title TEXT, authors TEXT);
-	INSERT INTO WORDS VALUES ('ja:食べる','食べた','食べる','ja',0,0,''), ('en:run','running','run','en',0,0,'');
+	INSERT INTO WORDS VALUES ('ja:食べる','食べる','食べた','ja',0,0,''), ('en:run','run','running','en',0,0,'');
 	INSERT INTO BOOK_INFO VALUES ('b1','','','ja','本','');
 	INSERT INTO LOOKUPS VALUES ('l1','ja:食べる','b1','','','昨日寿司を食べた。',100),
 	                           ('l2','en:run','b1','','','I was running.',200),
@@ -34,7 +34,7 @@ func TestReadLookups(t *testing.T) {
 		t.Fatalf("got %d lookups, want 1: %+v", len(got), got)
 	}
 	l := got[0]
-	if l.Word != "食べた" || l.Stem != "食べる" || l.BookTitle != "本" || l.Timestamp != 100 {
+	if l.Lemma != "食べる" || l.Surface != "食べた" || l.BookTitle != "本" || l.Timestamp != 100 {
 		t.Errorf("unexpected lookup %+v", l)
 	}
 

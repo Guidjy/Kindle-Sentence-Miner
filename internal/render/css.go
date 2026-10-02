@@ -1,17 +1,23 @@
 package render
 
 import (
+	"fmt"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 // Ports of Yomitan's sanitizeCSS and addScopeToCssLegacy. Yomitan relies on
-// the browser's CSS parser; this is a small parser for top level rules that
-// produces equivalent output for dictionary styles.css files.
+// the browser's CSS parser and serializer (CSSStyleSheet.cssRules[].cssText);
+// this reproduces Chrome's output for dictionary styles.css files, including
+// nested rules and Chrome's value normalization (hex colors to rgb(), 0 to
+// 0px for lengths).
 
 type cssRule struct {
 	selector string
-	body     string
+	decls    []string // "prop: value;" serialized declarations
+	children []cssRule
 	at       bool // @-rule; dropped when scoping, like non-CSSStyleRule rules
 	raw      string
 }
@@ -19,33 +25,39 @@ type cssRule struct {
 var cssComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 
 func parseCSS(css string) []cssRule {
-	css = cssComment.ReplaceAllString(css, "")
-	var rules []cssRule
+	rules, _ := parseBlock(cssComment.ReplaceAllString(css, ""), false)
+	return rules
+}
+
+// parseBlock parses rules (and, inside a style rule, declarations).
+func parseBlock(css string, inRule bool) (rules []cssRule, decls []string) {
 	i := 0
 	for i < len(css) {
-		for i < len(css) && isSpace(css[i]) {
+		for i < len(css) && (isSpace(css[i]) || css[i] == ';') {
 			i++
 		}
 		if i >= len(css) {
 			break
 		}
 		start := i
-		// Find '{' or ';' (statement at-rule) at depth 0, skipping strings.
-		for i < len(css) && css[i] != '{' && css[i] != ';' {
+		for i < len(css) && css[i] != '{' && css[i] != ';' && css[i] != '}' {
 			i = skipString(css, i)
 		}
-		if i >= len(css) {
-			break
-		}
-		prelude := strings.TrimSpace(css[start:i])
-		if css[i] == ';' {
-			i++
-			if strings.HasPrefix(prelude, "@") {
+		prelude := strings.TrimSpace(css[start:min(i, len(css))])
+		if i >= len(css) || css[i] != '{' {
+			// A declaration (or a statement at-rule at the top level).
+			if inRule {
+				if d, ok := normalizeDeclaration(prelude); ok {
+					decls = append(decls, d)
+				}
+			} else if strings.HasPrefix(prelude, "@") {
 				rules = append(rules, cssRule{at: true, raw: prelude + ";"})
+			}
+			if i < len(css) {
+				i++
 			}
 			continue
 		}
-		// Block: find the matching '}'.
 		bodyStart := i + 1
 		depth := 0
 		for i < len(css) {
@@ -62,7 +74,7 @@ func parseCSS(css string) []cssRule {
 				break
 			}
 		}
-		body := css[bodyStart : i-1]
+		body := css[bodyStart:max(bodyStart, i-1)]
 		if strings.HasPrefix(prelude, "@") {
 			rules = append(rules, cssRule{at: true, raw: prelude + " {" + body + "}"})
 			continue
@@ -70,9 +82,10 @@ func parseCSS(css string) []cssRule {
 		if prelude == "" {
 			continue
 		}
-		rules = append(rules, cssRule{selector: normalizeSelectorList(prelude), body: normalizeDeclarations(body)})
+		children, ds := parseBlock(body, true)
+		rules = append(rules, cssRule{selector: normalizeSelectorList(prelude), decls: ds, children: children})
 	}
-	return rules
+	return rules, decls
 }
 
 func isSpace(c byte) bool { return c == ' ' || c == '\n' || c == '\t' || c == '\r' || c == '\f' }
@@ -135,38 +148,109 @@ func splitTopLevel(s string, sep byte) []string {
 	return append(parts, s[start:])
 }
 
-var singleQuoted = regexp.MustCompile(`'([^'"\\]*)'`)
+var (
+	singleQuoted = regexp.MustCompile(`'([^'"\\]*)'`)
+	hexColor     = regexp.MustCompile(`#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b`)
+)
 
-func normalizeDeclarations(body string) string {
-	var decls []string
-	for _, d := range splitTopLevel(body, ';') {
-		d = strings.TrimSpace(d)
-		if d == "" || strings.Contains(d, "{") {
-			continue
-		}
-		i := strings.IndexByte(d, ':')
-		if i <= 0 {
-			continue
-		}
-		prop := strings.TrimSpace(d[:i])
-		if !strings.HasPrefix(prop, "--") {
-			prop = strings.ToLower(prop)
-		}
-		value := spaceRun.ReplaceAllString(strings.TrimSpace(d[i+1:]), " ")
-		value = singleQuoted.ReplaceAllString(value, `"$1"`)
-		decls = append(decls, prop+": "+value+";")
-	}
-	return strings.Join(decls, " ")
+// lengthProperties get a bare 0 serialized as 0px, like Chrome does.
+var lengthProperties = map[string]bool{
+	"margin": true, "margin-top": true, "margin-right": true, "margin-bottom": true, "margin-left": true,
+	"padding": true, "padding-top": true, "padding-right": true, "padding-bottom": true, "padding-left": true,
+	"width": true, "height": true, "min-width": true, "min-height": true, "max-width": true, "max-height": true,
+	"top": true, "right": true, "bottom": true, "left": true, "border-width": true, "border-top-width": true,
+	"border-right-width": true, "border-bottom-width": true, "border-left-width": true, "border-radius": true,
+	"gap": true, "row-gap": true, "column-gap": true, "text-indent": true, "letter-spacing": true, "font-size": true,
+	"margin-inline-start": true, "margin-inline-end": true, "padding-inline-start": true, "padding-inline-end": true,
 }
 
+func normalizeDeclaration(d string) (string, bool) {
+	i := strings.IndexByte(d, ':')
+	if i <= 0 {
+		return "", false
+	}
+	prop := strings.TrimSpace(d[:i])
+	value := strings.TrimSpace(d[i+1:])
+	if strings.HasPrefix(prop, "--") {
+		return prop + ": " + value + ";", true
+	}
+	prop = strings.ToLower(prop)
+	value = spaceRun.ReplaceAllString(value, " ")
+	value = singleQuoted.ReplaceAllString(value, `"$1"`)
+	// Values with var() are kept as written until substitution.
+	if !strings.Contains(value, "var(") {
+		value = hexColor.ReplaceAllStringFunc(value, hexToRGB)
+		if lengthProperties[prop] {
+			fields := strings.Split(value, " ")
+			for j, f := range fields {
+				if f == "0" {
+					fields[j] = "0px"
+				}
+			}
+			value = strings.Join(fields, " ")
+		}
+	}
+	return prop + ": " + value + ";", true
+}
+
+func hexToRGB(hex string) string {
+	h := hex[1:]
+	if len(h) == 3 || len(h) == 4 {
+		var b strings.Builder
+		for _, c := range h {
+			b.WriteRune(c)
+			b.WriteRune(c)
+		}
+		h = b.String()
+	}
+	v, err := strconv.ParseUint(h, 16, 32)
+	if err != nil {
+		return hex
+	}
+	if len(h) == 6 {
+		return fmt.Sprintf("rgb(%d, %d, %d)", v>>16&0xff, v>>8&0xff, v&0xff)
+	}
+	return fmt.Sprintf("rgba(%d, %d, %d, %s)", v>>24&0xff, v>>16&0xff, v>>8&0xff, alphaString(int(v&0xff)))
+}
+
+// alphaString serializes an 8-bit alpha with the fewest decimals that
+// round-trip, like Chrome.
+func alphaString(a int) string {
+	if a == 255 {
+		return "1"
+	}
+	for _, scale := range []float64{100, 1000} {
+		f := math.Round(float64(a)/255*scale) / scale
+		if int(math.Round(f*255)) == a {
+			return strconv.FormatFloat(f, 'f', -1, 64)
+		}
+	}
+	return strconv.FormatFloat(float64(a)/255, 'f', 3, 64)
+}
+
+// String serializes like CSSStyleRule.cssText: flat rules on one line,
+// rules with nested rules over several lines.
 func (r cssRule) String() string {
 	if r.at {
 		return r.raw
 	}
-	if r.body == "" {
-		return r.selector + " { }"
+	if len(r.children) == 0 {
+		if len(r.decls) == 0 {
+			return r.selector + " { }"
+		}
+		return r.selector + " { " + strings.Join(r.decls, " ") + " }"
 	}
-	return r.selector + " { " + r.body + " }"
+	var b strings.Builder
+	b.WriteString(r.selector + " {\n")
+	if len(r.decls) > 0 {
+		b.WriteString("  " + strings.Join(r.decls, " ") + "\n")
+	}
+	for _, c := range r.children {
+		// Chrome indents only the first line of a nested rule.
+		b.WriteString("  " + c.String() + "\n")
+	}
+	b.WriteString("}")
+	return b.String()
 }
 
 // sanitizeCSS re-serializes CSS through the parser, dropping anything that
@@ -180,8 +264,8 @@ func sanitizeCSS(css string) string {
 	return strings.Join(out, "\n")
 }
 
-// addScopeToCSS prefixes every selector of every style rule with scope and
-// drops @-rules (Yomitan's addScopeToCssLegacy).
+// addScopeToCSS prefixes every top level selector with scope and drops
+// @-rules (Yomitan's addScopeToCssLegacy).
 func addScopeToCSS(css, scope string) string {
 	var out []string
 	for _, r := range parseCSS(css) {

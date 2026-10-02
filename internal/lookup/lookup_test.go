@@ -4,8 +4,10 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/xythh/ann2html/internal/deinflect"
 	"github.com/xythh/ann2html/internal/store"
 	"github.com/xythh/ann2html/internal/yomitan/importer"
 	"github.com/xythh/ann2html/internal/yomitan/settings"
@@ -53,7 +55,7 @@ func TestFindDictionaryOrder(t *testing.T) {
 		for _, n := range order {
 			dicts = append(dicts, settings.Dictionary{Name: n, Enabled: true})
 		}
-		l, err := New(st, Options{Dictionaries: dicts, ResultOutputMode: "group"})
+		l, err := New(st, Options{Dictionaries: dicts, ResultOutputMode: "group"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,7 +105,7 @@ func TestFindDictionaryOrder(t *testing.T) {
 
 func TestFindFallsBackToSurface(t *testing.T) {
 	st := setup(t)
-	l, err := New(st, Options{Dictionaries: []settings.Dictionary{{Name: "A", Enabled: true}}, ResultOutputMode: "split"})
+	l, err := New(st, Options{Dictionaries: []settings.Dictionary{{Name: "A", Enabled: true}}, ResultOutputMode: "split"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,5 +118,94 @@ func TestFindFallsBackToSurface(t *testing.T) {
 	}
 	if entries, _ := l.Find("無い", "無い"); len(entries) != 0 {
 		t.Error("expected no entries")
+	}
+}
+
+func TestFindAt(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	importDict(t, st, map[string]string{
+		"index.json": `{"title":"J","revision":"1","format":3}`,
+		"term_bank_1.json": `[["労る","いたわる","v5","v5",0,["to pity"],1,""],["いたわる","いたわる","v5","v5",0,["to be kind"],2,""],
+			["馴染む","なじむ","v5","v5",0,["to become familiar"],3,""],["馴染み","なじみ","n","n",0,["intimacy"],4,""],
+			["休み","やすみ","n","n",0,["rest"],5,""],["休む","やすむ","v5","v5",0,["to rest"],6,""]]`,
+	})
+	d, err := deinflect.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := New(st, Options{Dictionaries: []settings.Dictionary{{Name: "J", Enabled: true}}, ResultOutputMode: "group"}, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := l.FindAt("青子の健康をいたわって休みを入れる", 6)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("entries = %v, err = %v", entries, err)
+	}
+	e := entries[0]
+	if e.Headwords[0].Term != "いたわる" || e.PrimarySource().OriginalText != "いたわって" {
+		t.Errorf("got %s from %q", e.Headwords[0].Term, e.PrimarySource().OriginalText)
+	}
+	if len(e.InflectionChains) == 0 || len(e.InflectionChains[0]) == 0 {
+		t.Errorf("expected an inflection chain, got %v", e.InflectionChains)
+	}
+
+	// Yomitan prefers the exact noun over the deinflected verb.
+	entries, _ = l.FindAt("馴染みのない布団", 0)
+	if len(entries) == 0 || entries[0].Headwords[0].Term != "馴染み" {
+		t.Errorf("馴染み: %+v", entries)
+	}
+	// The noun must not match a verb inflection (part of speech filter).
+	for _, e := range entries {
+		if e.Headwords[0].Term == "馴染む" && e.PrimarySource().OriginalText == "馴染みの" {
+			t.Error("unexpected match")
+		}
+	}
+
+	if entries, _ := l.FindAt("休みを", 0); len(entries) == 0 || entries[0].Headwords[0].Term != "休み" {
+		t.Errorf("休み: %+v", entries)
+	}
+	if entries, _ := l.FindAt("abc", 5); entries != nil {
+		t.Error("out of range start should return nothing")
+	}
+}
+
+func TestParseText(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	importDict(t, st, map[string]string{
+		"index.json":       `{"title":"J","revision":"1","format":3}`,
+		"term_bank_1.json": `[["食べる","たべる","v1","v1",0,["to eat"],1,""],["寿司","すし","n","n",0,["sushi"],2,""]]`,
+	})
+	d, _ := deinflect.New()
+	l, err := New(st, Options{Dictionaries: []settings.Dictionary{{Name: "J", Enabled: true}}, ResultOutputMode: "group"}, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terms, err := l.ParseText("「寿司を食べた」")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, term := range terms {
+		s := ""
+		for _, seg := range term {
+			s += seg.Text
+			if seg.Reading != "" {
+				s += "[" + seg.Reading + "]"
+			}
+		}
+		got = append(got, s)
+	}
+	want := []string{"「", "寿司[すし]", "を", "食[た]べた", "」"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }

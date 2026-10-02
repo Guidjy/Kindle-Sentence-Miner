@@ -47,6 +47,10 @@ func ImportCollection(st *store.Store, path string, progress Progress) (err erro
 		return err
 	}
 	defer func() { err = w.finish(err) }()
+	// Like Yomitan, importing a collection replaces every installed dictionary.
+	if err := w.clearAll(); err != nil {
+		return err
+	}
 
 	report := func(table string) {
 		if progress != nil {
@@ -123,11 +127,15 @@ func importDataObject(dec *json.Decoder, w *writer, report func(string)) error {
 }
 
 // importTable reads {"tableName": "...", "inbound": bool, "rows": [...]}.
+// Rows of tables with outbound keys ("inbound": false, e.g. dictionaries,
+// tagMeta and termMeta in current Yomitan versions) are wrapped as
+// {"$": [key, row], "$types": {...}}.
 func importTable(dec *json.Decoder, w *writer, report func(string)) error {
 	if err := expectDelim(dec, '{'); err != nil {
 		return err
 	}
 	table := ""
+	inbound := true
 	for dec.More() {
 		key, err := readKey(dec)
 		if err != nil {
@@ -136,6 +144,10 @@ func importTable(dec *json.Decoder, w *writer, report func(string)) error {
 		switch key {
 		case "tableName":
 			if err := dec.Decode(&table); err != nil {
+				return err
+			}
+		case "inbound":
+			if err := dec.Decode(&inbound); err != nil {
 				return err
 			}
 		case "rows":
@@ -147,7 +159,22 @@ func importTable(dec *json.Decoder, w *writer, report func(string)) error {
 			}
 			n := 0
 			for dec.More() {
-				if err := importRow(dec, w, table); err != nil {
+				if !wantedTable(table) {
+					if err := skipValue(dec); err != nil {
+						return err
+					}
+					continue
+				}
+				var raw json.RawMessage
+				if err := dec.Decode(&raw); err != nil {
+					return fmt.Errorf("%s row %d: %w", table, n, err)
+				}
+				if !inbound {
+					if raw, err = unwrapOutbound(raw); err != nil {
+						return fmt.Errorf("%s row %d: %w", table, n, err)
+					}
+				}
+				if err := importRow(raw, w, table); err != nil {
 					return fmt.Errorf("%s row %d: %w", table, n, err)
 				}
 				n++
@@ -168,51 +195,73 @@ func importTable(dec *json.Decoder, w *writer, report func(string)) error {
 	return expectDelim(dec, '}')
 }
 
-func importRow(dec *json.Decoder, w *writer, table string) error {
+// wantedTable reports whether rows of table are imported; kanji tables are
+// not needed for term cards.
+func wantedTable(table string) bool {
+	switch table {
+	case "dictionaries", "terms", "termMeta", "tagMeta", "media":
+		return true
+	}
+	return false
+}
+
+// unwrapOutbound extracts the row from an outbound-key row {"$": [key, row]}.
+func unwrapOutbound(raw json.RawMessage) (json.RawMessage, error) {
+	var wrapped struct {
+		Dollar []json.RawMessage `json:"$"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, err
+	}
+	if len(wrapped.Dollar) != 2 {
+		return nil, fmt.Errorf("unexpected outbound row format")
+	}
+	return wrapped.Dollar[1], nil
+}
+
+func importRow(raw json.RawMessage, w *writer, table string) error {
 	switch table {
 	case "dictionaries":
 		var d dictSummary
-		if err := dec.Decode(&d); err != nil {
+		if err := json.Unmarshal(raw, &d); err != nil {
 			return err
 		}
 		return w.addDictionary(d)
 	case "terms":
 		var t termRow
-		if err := dec.Decode(&t); err != nil {
+		if err := json.Unmarshal(raw, &t); err != nil {
 			return err
 		}
 		return w.addTerm(t)
 	case "termMeta":
 		var m termMetaRow
-		if err := dec.Decode(&m); err != nil {
+		if err := json.Unmarshal(raw, &m); err != nil {
 			return err
 		}
 		return w.addTermMeta(m)
 	case "tagMeta":
 		var t tagRow
-		if err := dec.Decode(&t); err != nil {
+		if err := json.Unmarshal(raw, &t); err != nil {
 			return err
 		}
 		return w.addTag(t)
 	case "media":
-		var raw struct {
+		var row struct {
 			mediaRow
 			Content json.RawMessage `json:"content"`
 		}
-		if err := dec.Decode(&raw); err != nil {
+		if err := json.Unmarshal(raw, &row); err != nil {
 			return err
 		}
-		m := raw.mediaRow
-		content, err := decodeBinary(raw.Content)
+		m := row.mediaRow
+		content, err := decodeBinary(row.Content)
 		if err != nil {
 			return fmt.Errorf("media %s: %w", m.Path, err)
 		}
 		m.Content = content
 		return w.addMedia(m)
-	default:
-		// kanji, kanjiMeta and anything unknown are not needed for term cards.
-		return skipValue(dec)
 	}
+	return nil
 }
 
 // decodeBinary decodes binary values as written by dexie-export-import:

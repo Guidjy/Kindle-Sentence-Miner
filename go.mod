@@ -3,6 +3,7 @@ module github.com/xythh/ann2html
 go 1.25.0
 
 require (
+	github.com/dop251/goja v0.0.0-20261002135814-104bc28c3abd
 	github.com/gen2brain/raylib-go/raygui v0.0.0-20260815042312-80156a59a482
 	github.com/gen2brain/raylib-go/raylib v0.60.1
 	github.com/ncruces/zenity v0.10.15
@@ -13,8 +14,11 @@ require (
 require (
 	github.com/akavel/rsrc v0.10.2 // indirect
 	github.com/dchest/jsmin v1.0.0 // indirect
+	github.com/dlclark/regexp2/v2 v2.8.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
+	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/josephspurrier/goversioninfo v1.7.0 // indirect

@@ -46,6 +46,11 @@ type Note struct {
 	Media MediaResolver
 	// Audio returns the Anki file name of the term's audio, if any.
 	Audio func() (string, bool)
+	// RuleNames maps inflection rule ids to user facing names ({conjugation}).
+	RuleNames func([]string) []string
+	// SentenceFurigana returns the sentence with furigana, as produced by
+	// Yomitan's text parser ({sentence-furigana}); ok is false if unavailable.
+	SentenceFurigana func(plain bool) (html string, ok bool)
 
 	def *definition
 }
@@ -312,8 +317,10 @@ func (n *Note) Marker(marker string) string {
 		}
 		return ""
 	case "character", "kunyomi", "onyomi", "onyomi-hiragana", "screenshot", "clipboard-image",
-		"clipboard-text", "popup-selection-text", "conjugation":
+		"clipboard-text", "popup-selection-text":
 		return ""
+	case "conjugation":
+		return n.conjugation()
 	case "dictionary":
 		return hbEscape(d.dictionary)
 	case "dictionary-alias":
@@ -357,7 +364,14 @@ func (n *Note) Marker(marker string) string {
 		return n.glossaryPlain(false, "")
 	case "glossary-plain-no-dictionary":
 		return n.glossaryPlain(true, "")
-	case "sentence", "sentence-furigana", "sentence-furigana-plain":
+	case "sentence":
+		return n.Context.Sentence
+	case "sentence-furigana", "sentence-furigana-plain":
+		if n.SentenceFurigana != nil {
+			if s, ok := n.SentenceFurigana(marker == "sentence-furigana-plain"); ok {
+				return s
+			}
+		}
 		return n.Context.Sentence
 	case "cloze-prefix", "cloze-body", "cloze-body-kana", "cloze-suffix":
 		prefix, body, bodyKana, suffix := n.cloze()
@@ -1185,4 +1199,84 @@ func (n *Note) phoneticTranscriptions() string {
 	}
 	b.WriteString("</ul>")
 	return b.String()
+}
+
+// conjugation renders the inflection chains that led from the text in the
+// sentence to the headword, e.g. "past « negative".
+func (n *Note) conjugation() string {
+	chains := n.Entry.InflectionChains
+	if len(chains) == 0 {
+		return ""
+	}
+	multiple := len(chains) > 1
+	var b strings.Builder
+	if multiple {
+		b.WriteString("<ul>")
+	}
+	for _, chain := range chains {
+		if len(chain) == 0 {
+			continue
+		}
+		names := chain
+		if n.RuleNames != nil {
+			names = n.RuleNames(chain)
+		}
+		if multiple {
+			b.WriteString("<li>")
+		}
+		for i, name := range names {
+			if i > 0 {
+				b.WriteString(" « ")
+			}
+			b.WriteString(hbEscape(name))
+		}
+		if multiple {
+			b.WriteString("</li>")
+		}
+	}
+	if multiple {
+		b.WriteString("</ul>")
+	}
+	return b.String()
+}
+
+// FuriganaHTML is createFuriganaHtml from Yomitan's anki-note-builder.js:
+// each parsed term in a <span class="term">, readings as ruby. The reading of
+// the mined term (overrideTerm) is replaced by overrideReading.
+func FuriganaHTML(terms [][]japanese.Segment, overrideTerm, overrideReading string) string {
+	var b strings.Builder
+	for _, term := range terms {
+		b.WriteString(`<span class="term">`)
+		for _, s := range term {
+			if s.Reading != "" {
+				b.WriteString("<ruby>" + s.Text + "<rt>" + furiganaReading(s, overrideTerm, overrideReading) + "</rt></ruby>")
+			} else {
+				b.WriteString(s.Text)
+			}
+		}
+		b.WriteString("</span>")
+	}
+	return b.String()
+}
+
+// FuriganaPlain is createFuriganaPlain: " text[reading]" style furigana.
+func FuriganaPlain(terms [][]japanese.Segment, overrideTerm, overrideReading string) string {
+	var b strings.Builder
+	for _, term := range terms {
+		for _, s := range term {
+			if s.Reading != "" {
+				b.WriteString(" " + s.Text + "[" + furiganaReading(s, overrideTerm, overrideReading) + "]")
+			} else {
+				b.WriteString(s.Text)
+			}
+		}
+	}
+	return strings.TrimLeft(b.String(), " \t\n\r")
+}
+
+func furiganaReading(s japanese.Segment, overrideTerm, overrideReading string) string {
+	if overrideTerm != "" && overrideTerm == s.Text && overrideReading != "" {
+		return overrideReading
+	}
+	return s.Reading
 }
