@@ -1,19 +1,26 @@
-This program does not need to be installed, simply move it wherever 
-you like, and copy in vocab.db each time you run it.
-you can also set the environment variable $ANN2HTML_VOCABDB to the location of your vocab.db
+ann2html turns the words you look up on your Kindle into Anki cards that look
+exactly like the ones Yomitan makes.
 
-Your vocab.db is usually found under
+Nothing needs to be installed; move this folder wherever you like. The app
+keeps its data (imported dictionaries and settings) in ann2html.db next to
+ann2html.exe.
 
-DRIVELETTER:\system\vocabulary\vocab.db 
-where DRIVELETTER is the drive letter for your kindle.
+Before you start
+  * Anki must be running with the AnkiConnect add-on installed.
+  * In Yomitan, export your settings (Settings > Backup > Export Settings) and
+    your dictionaries (Settings > Backup > Export Dictionary Collection). You
+    can also import individual dictionary .zip files instead.
 
-This folder might be hidden as Windows hides the vocab.db file in odd
-ways, so if you are unable to find it go to your kindle's drive and
-then search for vocab.db in windows explorer, then copy vocab.db
-into the folder ann2html.exe is in.
+Using it
+  1. Run ann2html.exe
+  2. Select your vocab.db. It is usually under
+       DRIVELETTER:\system\vocabulary\vocab.db
+     where DRIVELETTER is your Kindle's drive. Windows may hide this folder;
+     if you can't find it, search your Kindle's drive for vocab.db in
+     Windows Explorer.
+  3. Import your Yomitan settings and dictionaries (only needed once).
+  4. Click "Mine cards". Only lookups made since the last run are used, and
+     words that are already in Anki are skipped.
+You can also drag and drop any of these files onto the window.
 
-After vocab.db is found running ann2html will generate an edit.html file
-with your highlighted annotations. Each time you run ann2html it will see 
-if the found vocab.db is new, and if it is it will regenerate edit.html
-
-https://github.com/xythh/ann2html if you have issue or would like further instructions.
+https://github.com/xythh/ann2html if you have issues or would like further instructions.

@@ -1,19 +1,26 @@
-Move this folder to wherever you want it to be, ann2html will look for a config
-in the directory where the ann2html executable is or the environment variable
-$ANN2HTML_CONFIG
+ann2html turns the words you look up on your Kindle into Anki cards that look
+exactly like the ones Yomitan makes.
 
-Your kindle's vocab.db is under
-MOUNTPOINT/system/vocabulary/vocab.db
+Move this folder wherever you want; nothing needs to be installed. The app
+keeps its data (imported dictionaries and settings) in ann2html.db next to
+the executable.
 
+Before you start
+  * Anki must be running with the AnkiConnect add-on installed.
+  * In Yomitan, export your settings (Settings > Backup > Export Settings) and
+    your dictionaries (Settings > Backup > Export Dictionary Collection). You
+    can also import individual dictionary .zip files instead.
 
-Running ann2html will generate an edit.html file with your highlighted
-annotations. Each time you run ann2html it will see if the found
-vocab.db is new, and if it is it will regenerate edit.html
+Using it
+  1. Run ./ann2html
+  2. Select your vocab.db. It is under MOUNTPOINT/system/vocabulary/vocab.db
+  3. Import your Yomitan settings and dictionaries (only needed once).
+  4. Click "Mine cards". Only lookups made since the last run are used, and
+     words that are already in Anki are skipped.
+You can also drag and drop any of these files onto the window.
 
-If you would like to use the ann script, then find your kindles UUID
-and add it to the script. More detailed instructions below.
-
-
+The optional ann script mounts your Kindle, opens ann2html and unmounts the
+Kindle when you close it. It needs udisksctl. Add your Kindle's UUID to it:
 
 To find your uuid run ls -l /dev/disk/by-uuid and then connect your kindle and run it again.
 ls -l /dev/disk/by-uuid
@@ -26,12 +33,10 @@ total 0
 lrwxrwxrwx 1 root root 10 Nov 10 00:00 3472-5482 -> ../../nvme
 lrwxrwxrwx 1 root root 10 Nov 10 00:00 3251-54821212 -> ../../nvme2
 lrwxrwxrwx 1 root root 10 Nov 10 00:00 3582-6578 -> ../../sda
-in this example the UUID you want is 3582-6578 
+in this example the UUID you want is 3582-6578
 Then in the script called ann add your kindle uuid to the following line.
 
 kindle_UUID=
 kindle_UUID=3582-6578
-
-
 
 https://github.com/xythh/ann2html if you have issues or would like further instructions.

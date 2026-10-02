@@ -1,0 +1,33 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+`ann2html` (module `github.com/xythh/ann2html`, a fork of xythh/ann2html) is a raygui desktop app that reads a Kindle Vocabulary Builder `vocab.db` and creates Anki notes through AnkiConnect. The notes are meant to be indistinguishable from ones Yomitan would create: it imports the user's Yomitan settings export and dictionaries, and reproduces Yomitan's lookup ordering and default Anki field-template output in Go.
+
+## Commands
+
+- Build: `go build .` (or `make build` → `build/`). Requires **cgo** and a C compiler, because raylib-go compiles raylib's C sources. On Windows that is MSYS2 MinGW gcc; the first build is slow, later builds are cached. Add `-ldflags="-H windowsgui"` to hide the console on Windows.
+- Test: `go test ./...`. Run a single test with `go test ./internal/render -run TestGlossaryGrouped`. `go test -race ./internal/...` also works.
+- Release archives: `make dist`. Each target needs a C toolchain for its platform (build natively, or set `CC` to a cross compiler).
+- The app stores everything in `ann2html.db` next to the **executable**, not in the working directory. `go run .` therefore uses a temp dir; build and run the binary instead.
+
+## Architecture
+
+The data flow, orchestrated by `internal/miner`, is: `kindle` → `lookup` → `render` → `anki`.
+
+- `main.go` / `app.go` (package main): the raylib main loop must stay on the main OS thread (`runtime.LockOSThread` in `init`). Long tasks run as goroutines through `App.start`. The draw loop only reads `App.Snapshot()`, and all `App` fields are guarded by `App.mu`. File dialogs use `ncruces/zenity` in a goroutine. The bundled font `assets/MPLUS1p-Regular.ttf` is embedded, and `fontCache` rebuilds the atlas whenever displayed text contains new runes, so new Japanese characters must go through `fonts.ensure`.
+- `internal/store`: app SQLite DB (modernc, pure Go, `SetMaxOpenConns(1)`). It holds a `settings` key/value table (vocab path, raw Yomitan settings JSON, active profile, `last_timestamp`) and the imported dictionaries (`dictionaries`, `terms`, `term_meta`, `tag_meta`, `media`). Glossaries and meta data are stored as raw JSON strings. Importers drop the lookup indexes before bulk inserts and recreate them afterwards.
+- `internal/yomitan/importer`: `ImportCollection` stream-parses Yomitan's Dexie "dictionary collection" export with `json.Decoder.Token()`. These files can be several GB, so never load one whole. `ImportZip` handles standard dictionary archives. Re-importing a dictionary with the same title replaces it. Kanji tables are skipped.
+- `internal/yomitan/settings`: parses the settings export. The dictionary array order is the priority order (legacy exports use a map with numeric priorities). The term card format comes from `anki.cardFormats` (current) or `anki.terms` (legacy). `Fields` keeps JSON key order, because the first field is the duplicate key.
+- `internal/lookup`: a port of the relevant parts of Yomitan's `translator.js`. There is no deinflection, because Kindle's `WORDS.stem` is already the dictionary form; it falls back to the surface form. It covers grouping by result mode (group/split/merge/term), tag expansion and merging, redundant part-of-speech flags, term meta (freq/pitch/ipa) and Yomitan's sort comparators. `Find` returns entries sorted like Yomitan's popup; the miner uses `[0]`.
+- `internal/render`: a port of `default-anki-field-templates.handlebars`, `AnkiTemplateRenderer`, `anki-note-data-creator.js`, `StructuredContentGenerator` and `PronunciationGenerator`. `dom.go` is a tiny DOM that inlines CSS from Yomitan's style tables (`styles/*.json`, copied from Yomitan), strips non-`data-sc-*` attributes, and serializes like `innerHTML`. Output must match Yomitan's byte-for-byte where practical, so keep handlebars whitespace/escaping quirks (e.g. `{part-of-speech}` comma placement, unescaped `{sentence}`) rather than "fixing" them. Media (dictionary images, audio) is resolved lazily through callbacks the miner provides.
+- `internal/audio`: ports Yomitan's audio sources. File names follow Yomitan's `yomitan_audio_<sha1>.<ext>`, and images use `yomitan_dictionary_media_<sha1>.<ext>`.
+- `internal/miner`: runs in order: read lookups, look them up, render the first field, dedupe within the run, then `canAddNotesWithErrorDetail` (falling back to `canAddNotes`) with first-field-only probe notes, as Yomitan's `partitionAddibleNotes` does. After that it renders all fields and runs `addNote` with a worker pool, uploading media once per key via `run.once`. `last_timestamp` advances to the newest handled lookup. If any add failed, it is set to just before the earliest failure so that lookup is retried. A cancelled run does not move it.
+
+Yomitan reference sources are the ground truth for rendering and lookup behavior: https://github.com/yomidevs/yomitan (`ext/js/language/translator.js`, `ext/js/templates/anki-template-renderer.js`, `ext/js/data/anki-note-data-creator.js`, `ext/data/templates/default-anki-field-templates.handlebars`). Both projects are GPL-3.0.
+
+## Testing notes
+
+Tests build their fixtures in code: dictionary zips, a `vocab.db` with the Kindle schema (`WORDS`, `LOOKUPS`, `BOOK_INFO`) and a fake AnkiConnect server (`internal/miner/miner_test.go`). Render tests compare exact HTML strings. When one fails, check the expected HTML against Yomitan's template semantics before changing the code.

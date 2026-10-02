@@ -1,5 +1,7 @@
 release/
+build/
 
-# my test files
-edit.html
+# local test files and app data
 vocab.db
+ann2html.db
+ann2html.db-*

@@ -1,18 +1,20 @@
 #!/bin/bash
-# Bash script to make pulling cards from kindle easier
-# Plug in kindle and then run script
-om=false
+# Mounts your Kindle, opens ann2html and unmounts the Kindle when it closes.
+# Plug in your Kindle, then run this script.
 kindle_UUID=
 
-
-# if it was already mounted, don't try to remount and don't unmounted
 set -e
-df | grep -q "$(blkid -U $kindle_UUID)" && om=true && echo "Device already mounted, will keep it mounted" || 
-if [[ "$om" = 'false' ]]; then
-udisksctl mount -b /dev/disk/by-uuid/$kindle_UUID 
-echo Device found and Mounted!
-fi 
-if [ "$om" = 'false' ]; then
-udisksctl unmount -b /dev/disk/by-uuid/$kindle_UUID 
+already_mounted=false
+if df | grep -q "$(blkid -U "$kindle_UUID")"; then
+	already_mounted=true
+	echo "Device already mounted, will keep it mounted"
+else
+	udisksctl mount -b "/dev/disk/by-uuid/$kindle_UUID"
+	echo "Device found and mounted!"
 fi
-ann2html
+
+"$(dirname "$(readlink -f "$0")")/ann2html" || ann2html
+
+if [ "$already_mounted" = false ]; then
+	udisksctl unmount -b "/dev/disk/by-uuid/$kindle_UUID"
+fi

@@ -1,17 +1,24 @@
-IMPORTANT: running ann2html by simply double clicking on it does not work,
-Apple requires applications to be signed for that to work and that costs 100 dollars a year.
-To run ann2html open up your terminal, go to the directory where ann2html is and run ./ann2html in your terminal.
+ann2html turns the words you look up on your Kindle into Anki cards that look
+exactly like the ones Yomitan makes.
 
-This program does not need to be installed, simply move it wherever you
-like, and copy in vocab.db each time you run it.
-you can also set the environment variable $ANN2HTML_VOCABDB to the location of your vocab.db
+IMPORTANT: double clicking ann2html does not work because Apple requires
+applications to be signed. Open your terminal, go to the directory where
+ann2html is and run ./ann2html
 
-Your kindle's vocab.db is under
-MOUNTPOINT/system/vocabulary/vocab.db
+Nothing needs to be installed. The app keeps its data (imported dictionaries
+and settings) in ann2html.db next to the executable.
 
-Running ann2html will generate an edit.html file with your highlighted
-annotations. Each time you run ann2html it will see if the found
-vocab.db is new, and if it is it will regenerate edit.html
+Before you start
+  * Anki must be running with the AnkiConnect add-on installed.
+  * In Yomitan, export your settings (Settings > Backup > Export Settings) and
+    your dictionaries (Settings > Backup > Export Dictionary Collection). You
+    can also import individual dictionary .zip files instead.
+
+Using it
+  1. Select your vocab.db. It is under MOUNTPOINT/system/vocabulary/vocab.db
+  2. Import your Yomitan settings and dictionaries (only needed once).
+  3. Click "Mine cards". Only lookups made since the last run are used, and
+     words that are already in Anki are skipped.
+You can also drag and drop any of these files onto the window.
 
 https://github.com/xythh/ann2html if you have issues or would like further instructions.
-
