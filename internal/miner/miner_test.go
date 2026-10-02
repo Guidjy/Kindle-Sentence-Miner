@@ -117,10 +117,12 @@ func fixture(t *testing.T) (dir string, st *store.Store) {
 	CREATE TABLE LOOKUPS (id TEXT PRIMARY KEY, word_key TEXT, book_key TEXT, dict_key TEXT, pos TEXT, usage TEXT, timestamp INTEGER);
 	CREATE TABLE BOOK_INFO (id TEXT PRIMARY KEY, asin TEXT, guid TEXT, lang TEXT, title TEXT, authors TEXT);
 	INSERT INTO WORDS VALUES ('ja:食べる','食べる','食べた','ja',0,0,''), ('ja:猫','猫','猫','ja',0,0,''),
-	                         ('ja:本','本','本','ja',0,0,''), ('ja:無','無い語','無','ja',0,0,'');
+	                         ('ja:本','本','本','ja',0,0,''), ('ja:無','無い語','無','ja',0,0,''),
+	                         ('ja:猫、本','猫、本','猫','ja',0,0,'');
 	INSERT INTO BOOK_INFO VALUES ('b','','','ja','Book','');
 	INSERT INTO LOOKUPS VALUES ('1','ja:食べる','b','','','寿司を食べた。',10), ('2','ja:食べる','b','','','また食べた。',20),
-	                           ('3','ja:猫','b','','','猫がいる。',30), ('4','ja:無','b','','','無',40), ('5','ja:本','b','','','本を読む。',50);`)
+	                           ('3','ja:猫','b','','','猫がいる。',30), ('4','ja:無','b','','','無',40), ('5','ja:本','b','','','本を読む。',50),
+	                           ('6','ja:猫、本','b','','','猫、本がある。',45);`)
 	db.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +166,7 @@ func TestRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Total != 5 || status.Added != 2 || status.Duplicates != 1 || status.NoDefinition != 1 || status.Failed != 1 {
+	if status.Total != 6 || status.Added != 2 || status.Duplicates != 1 || status.NoDefinition != 1 || status.Skipped != 1 || status.Failed != 1 {
 		t.Fatalf("status = %+v", status)
 	}
 	var eat anki.Note
@@ -212,7 +214,7 @@ func TestRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Added != 0 || status.Duplicates != 4 {
+	if status.Added != 0 || status.Duplicates != 4 || status.Skipped != 1 {
 		t.Fatalf("rescan status = %+v", status)
 	}
 	if len(fake.notes) != 3 {

@@ -254,14 +254,19 @@ func (u *ui) draw(s Snapshot) {
 	if rescan != s.RescanAll {
 		u.app.SetRescanAll(rescan)
 	}
+	// The sentences page only needs vocab.db, for mining by hand in a browser.
+	setEnabled(!busy && s.VocabPath != "")
+	if rg.Button(rl.NewRectangle(w-pad-12-180-12-210, y+18, 210, rowHeight), "Open sentences page") {
+		u.app.OpenSentencePage()
+	}
 	setEnabled(!busy && s.VocabPath != "" && len(s.Profiles) > 0)
 	if rg.Button(rl.NewRectangle(w-pad-12-180, y+18, 180, rowHeight), "Mine cards") {
 		u.app.Mine()
 	}
 	setEnabled(true)
 	st := s.Status
-	label(x+12, y+58, inner-24, fmt.Sprintf("Lookups found: %d     Added: %d     Already in Anki: %d     No definition: %d     Failed: %d",
-		st.Total, st.Added, st.Duplicates, st.NoDefinition, st.Failed))
+	label(x+12, y+58, inner-24, fmt.Sprintf("Lookups: %d    Added: %d    Already in Anki: %d    No definition: %d    Multi-word: %d    Failed: %d",
+		st.Total, st.Added, st.Duplicates, st.NoDefinition, st.Skipped, st.Failed))
 	y += 120
 
 	// Progress

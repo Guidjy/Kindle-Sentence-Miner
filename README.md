@@ -57,6 +57,12 @@ Run `ann2html` and work through the window from top to bottom:
 
 You can also drag and drop `vocab.db`, a settings export or dictionaries onto the window.
 
+To mine by hand instead, click **Open sentences page**. It writes `edit.html` next to the executable
+(the original ann2html page: every lookup's sentence with the word in bold, oldest first) and opens
+it in your browser, where you can mine with Yomitan as usual. Press `b` on the page to bookmark your
+position; new lookups are added at the end, so the bookmark stays valid. This only needs
+`vocab.db`, not the Yomitan settings or dictionaries.
+
 The app remembers where it stopped: the next run only looks at new lookups. If adding a card fails
 (for example Anki was closed), that lookup is retried on the next run. Tick **Re-scan all lookups** to
 go through the whole `vocab.db` again, for example after importing a new dictionary; cards already in
@@ -70,9 +76,11 @@ executable.
   templates are used, and the app warns you if your profile has customized ones.
 * Text-to-speech audio sources and the `{pitch-accent-graphs-jj}`, `{screenshot}` and clipboard markers
   are not supported.
-* The card uses the word Yomitan would show at the spot the Kindle lookup points to. If you selected
-  text starting with a particle on the Kindle (e.g. の杞憂), the particle is mined, just as hovering
-  there in Yomitan would.
+* The card uses the word Yomitan would show at the spot the Kindle lookup points to.
+* If you selected several words on the Kindle (e.g. は、潔く or として雇う), the lookup is skipped,
+  because it is unclear which word you meant. Skipped lookups are listed in the log and counted as
+  "Multi-word"; mine them by hand from the sentences page. Selecting part of a word (咎めなかっ) or a
+  word with trailing grammar (参ったな) still creates a card.
 * The duplicate behavior is always "prevent": existing notes are never overwritten.
 
 ### Linux script

@@ -46,3 +46,20 @@ func TestReadLookups(t *testing.T) {
 		t.Errorf("want 3 lookups ordered by timestamp, got %+v", all)
 	}
 }
+
+func TestMaybeSelection(t *testing.T) {
+	cases := []struct {
+		lk   Lookup
+		want bool
+	}{
+		{Lookup{Lemma: "は、潔く", Surface: "は", Usage: "悪いことをした時は、潔く謝ったほうがいい。"}, true},
+		{Lookup{Lemma: "として雇う", Surface: "として", Usage: "護衛として雇うつもりだ。"}, true},
+		{Lookup{Lemma: "散らす", Surface: "散らし", Usage: "エリスはパッと髪を散らした。"}, false},
+		{Lookup{Lemma: "家名", Surface: "家名", Usage: "家名に泥が付く"}, false},
+	}
+	for _, c := range cases {
+		if got := c.lk.MaybeSelection(); got != c.want {
+			t.Errorf("%s/%s: got %v", c.lk.Lemma, c.lk.Surface, got)
+		}
+	}
+}

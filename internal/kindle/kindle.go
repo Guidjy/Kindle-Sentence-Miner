@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/xythh/ann2html/internal/japanese"
 
 	_ "modernc.org/sqlite"
 )
@@ -76,4 +79,44 @@ func ReadLookups(dbPath string, since int64, langs []string) ([]Lookup, error) {
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+// MaybeSelection reports whether the lookup has the shape of a multi-word
+// selection: the Kindle stores the selected text as the word (so it appears
+// verbatim in the sentence) and only its first token as the stem.
+func (lk Lookup) MaybeSelection() bool {
+	return lk.Lemma != lk.Surface && lk.Surface != "" &&
+		strings.HasPrefix(lk.Lemma, lk.Surface) && strings.Contains(lk.Usage, lk.Lemma)
+}
+
+// WordStart finds where the looked up word appears in its sentence (rune
+// offset), or -1. The Kindle's word (the dictionary form, or the whole
+// selection when several words were selected) pins the exact spot when it
+// appears verbatim; otherwise the surface form, else the longest prefix of
+// the dictionary form (inflected words share their stem with it).
+func (lk Lookup) WordStart() int {
+	runeIndex := func(s string) int {
+		if s == "" {
+			return -1
+		}
+		if i := strings.Index(lk.Usage, s); i >= 0 {
+			return utf8.RuneCountInString(lk.Usage[:i])
+		}
+		return -1
+	}
+	for _, s := range []string{lk.Lemma, lk.Surface} {
+		if i := runeIndex(s); i >= 0 {
+			return i
+		}
+	}
+	lemma := []rune(lk.Lemma)
+	for n := len(lemma) - 1; n >= 1; n-- {
+		if n == 1 && !japanese.IsCodePointKanji(lemma[0]) {
+			break
+		}
+		if i := runeIndex(string(lemma[:n])); i >= 0 {
+			return i
+		}
+	}
+	return -1
 }

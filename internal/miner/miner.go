@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/xythh/ann2html/internal/anki"
@@ -37,6 +38,7 @@ type Status struct {
 	Total        int // lookups read from vocab.db
 	Processed    int
 	NoDefinition int
+	Skipped      int // multi-word selections, left for mining by hand
 	Duplicates   int // already in Anki, or the same word earlier in this run
 	Added        int
 	Failed       int
@@ -231,6 +233,12 @@ func (r *run) run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if isMultiWordSelection(lk, entries, start) {
+			handled(lk.Timestamp)
+			r.logf("Skipped multi-word selection %q; mine it by hand from the sentences page", lk.Lemma)
+			r.update(func(s *Status) { s.Skipped++; s.Processed++ })
+			continue
+		}
 		if len(entries) == 0 {
 			handled(lk.Timestamp)
 			r.logf("No definition: %s", lk.Lemma)
@@ -382,43 +390,53 @@ func (r *run) addNote(ctx context.Context, c *candidate) bool {
 	return true
 }
 
-// wordStart finds where the looked up word appears in its sentence (rune
-// offset), or -1. The Kindle's word (the dictionary form, or the whole
-// selection when several words were selected) pins the exact spot when it
-// appears verbatim; otherwise the surface form, else the longest prefix of
-// the dictionary form (inflected words share their stem with it).
-func wordStart(lk kindle.Lookup) int {
-	runeIndex := func(s string) int {
-		if s == "" {
-			return -1
-		}
-		if i := strings.Index(lk.Usage, s); i >= 0 {
-			return utf8.RuneCountInString(lk.Usage[:i])
-		}
-		return -1
+// isMultiWordSelection reports whether the user selected several words on
+// the Kindle. The Kindle stores a manual selection as the word, and its first
+// token as the stem. Yomitan's top match at the start of the selection is the
+// first word; the selection spans several words when the rest of it contains
+// another content word (kanji, katakana or letters), as in は、潔く or
+// として雇う. Selections of one word plus trailing grammar (参ったな, 淡々と)
+// or of part of a word (咎めなかっ) are mined. Multi-word selections are
+// skipped because it is unclear which word should become a card.
+func isMultiWordSelection(lk kindle.Lookup, entries []*lookup.Entry, start int) bool {
+	if !lk.MaybeSelection() || len(entries) == 0 || start < 0 {
+		return false
 	}
-	for _, s := range []string{lk.Lemma, lk.Surface} {
-		if i := runeIndex(s); i >= 0 {
-			return i
-		}
+	if utf8.RuneCountInString(lk.Usage[:strings.Index(lk.Usage, lk.Lemma)]) != start {
+		return false
 	}
-	lemma := []rune(lk.Lemma)
-	for n := len(lemma) - 1; n >= 1; n-- {
-		if n == 1 && !japanese.IsCodePointKanji(lemma[0]) {
-			break
-		}
-		if i := runeIndex(string(lemma[:n])); i >= 0 {
-			return i
+	src := entries[0].PrimarySource()
+	if src == nil {
+		return false
+	}
+	rest := []rune(lk.Lemma)[min(utf8.RuneCountInString(src.OriginalText), utf8.RuneCountInString(lk.Lemma)):]
+	for _, c := range rest {
+		if isContentRune(c) {
+			return true
 		}
 	}
-	return -1
+	return false
+}
+
+// isContentRune reports whether c can only belong to a content word: kanji,
+// katakana (except the prolonged sound mark) or letters and digits.
+func isContentRune(c rune) bool {
+	switch {
+	case japanese.IsCodePointKanji(c):
+		return true
+	case c >= 0x30a1 && c <= 0x30fa:
+		return true
+	case c >= 0x3040 && c <= 0x30ff, c >= 0x3000 && c <= 0x303f:
+		return false
+	}
+	return unicode.IsLetter(c) || unicode.IsDigit(c)
 }
 
 // findEntries returns Yomitan's entries for the word at its position in the
 // sentence, falling back to an exact lookup of the Kindle's forms. start is
 // -1 when the word could not be located.
 func (r *run) findEntries(lk kindle.Lookup) ([]*lookup.Entry, int, error) {
-	if start := wordStart(lk); start >= 0 {
+	if start := lk.WordStart(); start >= 0 {
 		entries, err := r.lookup.FindAt(lk.Usage, start)
 		if err != nil || len(entries) > 0 {
 			return entries, start, err

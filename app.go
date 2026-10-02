@@ -5,12 +5,17 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/xythh/ann2html/internal/deinflect"
+	"github.com/xythh/ann2html/internal/kindle"
 	"github.com/xythh/ann2html/internal/miner"
+	"github.com/xythh/ann2html/internal/sentencepage"
 	"github.com/xythh/ann2html/internal/store"
 	"github.com/xythh/ann2html/internal/yomitan/importer"
 	"github.com/xythh/ann2html/internal/yomitan/settings"
@@ -36,6 +41,10 @@ type App struct {
 	minerLogSeen int
 	log          []string
 	cancel       context.CancelFunc
+
+	deinflectOnce sync.Once
+	deinflect     *deinflect.Deinflector
+	deinflectErr  error
 }
 
 // Snapshot is a copy of the state for drawing one frame.
@@ -290,8 +299,8 @@ func (a *App) Mine() {
 		status, err := miner.Run(ctx, cfg, a.onMinerStatus)
 		a.onMinerStatus(status)
 		if err == nil {
-			a.logf("Finished: %d lookups, %d added, %d already in Anki, %d without definition, %d failed",
-				status.Total, status.Added, status.Duplicates, status.NoDefinition, status.Failed)
+			a.logf("Finished: %d lookups, %d added, %d already in Anki, %d without definition, %d multi-word selections skipped, %d failed",
+				status.Total, status.Added, status.Duplicates, status.NoDefinition, status.Skipped, status.Failed)
 		}
 		return err
 	})
@@ -346,4 +355,61 @@ func isDictionaryCollection(p string) bool {
 	buf := make([]byte, 512)
 	n, _ := bufio.NewReader(f).Read(buf)
 	return strings.Contains(string(buf[:n]), `"dexie"`)
+}
+
+// OpenSentencePage writes the sentences page (the original ann2html page for
+// mining by hand) next to the executable and opens it in the browser.
+func (a *App) OpenSentencePage() {
+	a.mu.Lock()
+	vocabPath := a.vocabPath
+	language := "ja"
+	if a.export != nil {
+		if l := a.export.Profile(a.profile).Options.General.Language; l != "" {
+			language = l
+		}
+	}
+	a.mu.Unlock()
+	if vocabPath == "" {
+		a.logf("Select your vocab.db first")
+		return
+	}
+	a.start("Creating sentences page", func(ctx context.Context) error {
+		lookups, err := kindle.ReadLookups(vocabPath, 0, []string{language})
+		if err != nil {
+			return err
+		}
+		d, err := a.deinflector()
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(dataDir(), sentencepage.FileName)
+		if err := sentencepage.Write(path, lookups, d); err != nil {
+			return err
+		}
+		a.logf("Wrote %d sentences to %s", len(lookups), path)
+		return openInBrowser(path)
+	})
+}
+
+// deinflector loads Yomitan's deinflection rules once.
+func (a *App) deinflector() (*deinflect.Deinflector, error) {
+	a.deinflectOnce.Do(func() { a.deinflect, a.deinflectErr = deinflect.New() })
+	return a.deinflect, a.deinflectErr
+}
+
+func openInBrowser(path string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+	case "darwin":
+		cmd = exec.Command("open", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("could not open the browser: %w", err)
+	}
+	go cmd.Wait()
+	return nil
 }
