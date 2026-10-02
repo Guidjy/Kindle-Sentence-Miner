@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -67,10 +68,64 @@ func Markers(template string) []string {
 }
 
 // Field replaces every {marker} in template with its rendered value.
+//
+// When the template wraps {cloze-body} in a tag (e.g.
+// "{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}"), other occurrences of
+// the mined word in {cloze-prefix} and {cloze-suffix} get the same tag, so
+// every instance of the word in the sentence is highlighted. This goes
+// beyond Yomitan, which only wraps the scanned occurrence.
 func (n *Note) Field(template string) string {
+	open, close := ClozeWrapper(template)
 	return markerPattern.ReplaceAllStringFunc(template, func(m string) string {
-		return n.Marker(m[1 : len(m)-1])
+		marker := m[1 : len(m)-1]
+		if open != "" && (marker == "cloze-prefix" || marker == "cloze-suffix") {
+			return n.highlightOccurrences(n.Marker(marker), open, close)
+		}
+		return n.Marker(marker)
 	})
+}
+
+// ClozeWrapper returns the tags a field template wraps around {cloze-body},
+// e.g. "<b>" and "</b>" for "{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}",
+// searching the templates in order.
+func ClozeWrapper(templates ...string) (open, close string) {
+	for _, t := range templates {
+		if m := clozeWrapper.FindStringSubmatch(t); m != nil && m[2] == m[4] {
+			return m[1], m[3]
+		}
+	}
+	return "", ""
+}
+
+var clozeWrapper = regexp.MustCompile(`(<([a-zA-Z][\w-]*)[^>]*>)\{cloze-body\}(</([a-zA-Z][\w-]*)>)`)
+
+// HighlightWords are the forms of the mined word that get highlighted: the
+// text at the lookup spot and the dictionary form.
+func (n *Note) HighlightWords() []string {
+	var words []string
+	if n.Context.OriginalText != "" {
+		words = append(words, n.Context.OriginalText)
+	}
+	if len(n.Entry.Headwords) > 0 && n.Entry.Headwords[0].Term != "" {
+		words = appendUniqueStr(words, n.Entry.Headwords[0].Term)
+	}
+	return words
+}
+
+// highlightOccurrences wraps every occurrence of the mined word (as it
+// appears in the sentence, or its dictionary form) in open/close.
+func (n *Note) highlightOccurrences(text, open, close string) string {
+	words := n.HighlightWords()
+	if len(words) == 0 || text == "" {
+		return text
+	}
+	sort.Slice(words, func(i, j int) bool { return len(words[i]) > len(words[j]) })
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = regexp.QuoteMeta(w)
+	}
+	re := regexp.MustCompile(strings.Join(quoted, "|"))
+	return re.ReplaceAllStringFunc(text, func(w string) string { return open + w + close })
 }
 
 // ---- note data (port of anki-note-data-creator.js) ----
@@ -1240,13 +1295,77 @@ func (n *Note) conjugation() string {
 	return b.String()
 }
 
+// Highlight marks occurrences of the mined word in furigana sentences.
+// Open and Close are the tags wrapped around each occurrence; a zero value
+// highlights nothing.
+type Highlight struct {
+	Words       []string
+	Open, Close string
+}
+
+// highlighted returns, for each parsed term, whether it lies inside an
+// occurrence of one of the words.
+func (h Highlight) highlighted(terms [][]japanese.Segment) []bool {
+	marks := make([]bool, len(terms))
+	if h.Open == "" || len(h.Words) == 0 {
+		return marks
+	}
+	var text []rune
+	starts := make([]int, len(terms))
+	for i, term := range terms {
+		starts[i] = len(text)
+		for _, seg := range term {
+			text = append(text, []rune(seg.Text)...)
+		}
+	}
+	words := append([]string{}, h.Words...)
+	sort.Slice(words, func(i, j int) bool { return len([]rune(words[i])) > len([]rune(words[j])) })
+	inside := make([]bool, len(text))
+	for i := 0; i < len(text); {
+		matched := 0
+		for _, w := range words {
+			wr := []rune(w)
+			if len(wr) > 0 && i+len(wr) <= len(text) && string(text[i:i+len(wr)]) == w {
+				matched = len(wr)
+				break
+			}
+		}
+		if matched == 0 {
+			i++
+			continue
+		}
+		for j := i; j < i+matched; j++ {
+			inside[j] = true
+		}
+		i += matched
+	}
+	for i := range terms {
+		end := len(text)
+		if i+1 < len(terms) {
+			end = starts[i+1]
+		}
+		if end > starts[i] {
+			marks[i] = true
+			for j := starts[i]; j < end; j++ {
+				marks[i] = marks[i] && inside[j]
+			}
+		}
+	}
+	return marks
+}
+
 // FuriganaHTML is createFuriganaHtml from Yomitan's anki-note-builder.js:
 // each parsed term in a <span class="term">, readings as ruby. The reading of
-// the mined term (overrideTerm) is replaced by overrideReading.
-func FuriganaHTML(terms [][]japanese.Segment, overrideTerm, overrideReading string) string {
+// the mined term (overrideTerm) is replaced by overrideReading. Terms that are
+// occurrences of the mined word are wrapped in h's tags.
+func FuriganaHTML(terms [][]japanese.Segment, overrideTerm, overrideReading string, h Highlight) string {
+	marks := h.highlighted(terms)
 	var b strings.Builder
-	for _, term := range terms {
+	for i, term := range terms {
 		b.WriteString(`<span class="term">`)
+		if marks[i] {
+			b.WriteString(h.Open)
+		}
 		for _, s := range term {
 			if s.Reading != "" {
 				b.WriteString("<ruby>" + s.Text + "<rt>" + furiganaReading(s, overrideTerm, overrideReading) + "</rt></ruby>")
@@ -1254,21 +1373,31 @@ func FuriganaHTML(terms [][]japanese.Segment, overrideTerm, overrideReading stri
 				b.WriteString(s.Text)
 			}
 		}
+		if marks[i] {
+			b.WriteString(h.Close)
+		}
 		b.WriteString("</span>")
 	}
 	return b.String()
 }
 
 // FuriganaPlain is createFuriganaPlain: " text[reading]" style furigana.
-func FuriganaPlain(terms [][]japanese.Segment, overrideTerm, overrideReading string) string {
+func FuriganaPlain(terms [][]japanese.Segment, overrideTerm, overrideReading string, h Highlight) string {
+	marks := h.highlighted(terms)
 	var b strings.Builder
-	for _, term := range terms {
+	for i, term := range terms {
+		if marks[i] {
+			b.WriteString(h.Open)
+		}
 		for _, s := range term {
 			if s.Reading != "" {
 				b.WriteString(" " + s.Text + "[" + furiganaReading(s, overrideTerm, overrideReading) + "]")
 			} else {
 				b.WriteString(s.Text)
 			}
+		}
+		if marks[i] {
+			b.WriteString(h.Close)
 		}
 	}
 	return strings.TrimLeft(b.String(), " \t\n\r")

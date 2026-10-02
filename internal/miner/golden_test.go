@@ -74,7 +74,7 @@ func TestGoldenTemae(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, err := Run(context.Background(), Config{Store: st, VocabPath: filepath.Join(dir, "vocab.db"), Languages: []string{"ja"}, Settings: export}, nil)
+	status, err := Run(context.Background(), Config{Store: st, VocabPath: filepath.Join(dir, "vocab.db"), Settings: export}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

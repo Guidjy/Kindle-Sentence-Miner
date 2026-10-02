@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/text/language"
 	_ "modernc.org/sqlite"
 )
 
@@ -23,23 +22,6 @@ type Lookup struct {
 	Lang      string
 	Usage     string // the sentence the word was looked up in
 	BookTitle string
-}
-
-// ParseLanguages splits a comma separated list of ISO 639 codes. An empty
-// string means all languages.
-func ParseLanguages(s string) ([]string, error) {
-	var out []string
-	for _, v := range strings.Split(s, ",") {
-		v = strings.TrimSpace(v)
-		if v == "" {
-			continue
-		}
-		if _, err := language.ParseBase(v); err != nil {
-			return nil, fmt.Errorf("%q is not a valid ISO 639 language code", v)
-		}
-		out = append(out, v)
-	}
-	return out, nil
 }
 
 // ReadLookups returns lookups newer than since (unix ms), oldest first,

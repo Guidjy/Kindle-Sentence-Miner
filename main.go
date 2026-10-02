@@ -89,8 +89,6 @@ type ui struct {
 	dialogOpen   atomic.Bool
 	profileEdit  bool
 	profileIndex int32
-	langEdit     bool
-	langText     string
 	logScroll    int32
 	logActive    int32
 	logFocus     int32
@@ -162,7 +160,7 @@ func main() {
 	rg.SetStyle(rg.LISTVIEW, rg.TEXT_ALIGNMENT, rg.TEXT_ALIGN_LEFT)
 	rg.SetStyle(rg.LISTVIEW, rg.TEXT_PADDING, 8)
 
-	u := &ui{app: app, langText: app.Snapshot().Languages, logActive: -1, logFocus: -1, dictActive: -1, dictFocus: -1}
+	u := &ui{app: app, logActive: -1, logFocus: -1, dictActive: -1, dictFocus: -1}
 	for !rl.WindowShouldClose() {
 		if rl.IsFileDropped() {
 			app.HandleDroppedFiles(rl.LoadDroppedFiles())
@@ -211,9 +209,14 @@ func (u *ui) draw(s Snapshot) {
 	}
 	setEnabled(true)
 	profileBox := rl.NewRectangle(x+204, y+18, 240, rowHeight)
-	if len(s.Profiles) == 0 {
+	switch len(s.Profiles) {
+	case 0:
 		label(x+204, y+18, inner-216, "Export them in Yomitan: Settings > Backup > Export Settings")
-	} else {
+	case 1:
+		// Nothing to choose: show the profile name instead of a dropdown.
+		label(x+204, y+18, 240, "Profile: "+s.Profiles[0])
+		label(x+456, y+18, inner-468, fmt.Sprintf("Deck: %s   Note type: %s", orDash(s.Deck), orDash(s.Model)))
+	default:
 		label(x+456, y+18, inner-468, fmt.Sprintf("Deck: %s   Note type: %s", orDash(s.Deck), orDash(s.Model)))
 	}
 	warning := strings.Join(s.Warnings, "  ")
@@ -245,25 +248,14 @@ func (u *ui) draw(s Snapshot) {
 
 	// 4. Mine
 	rg.GroupBox(rl.NewRectangle(x, y, inner, 104), "4. Create cards")
-	label(x+12, y+18, 90, "Languages:")
 	setEnabled(!busy)
-	if rg.TextBox(rl.NewRectangle(x+104, y+18, 120, rowHeight), &u.langText, 64, u.langEdit) {
-		u.langEdit = !u.langEdit
-		if !u.langEdit {
-			u.app.SetLanguages(u.langText)
-		}
-	}
 	rescan := s.RescanAll
-	rg.CheckBox(rl.NewRectangle(x+244, y+24, 18, 18), "Re-scan all lookups (already mined cards are skipped)", &rescan)
+	rg.CheckBox(rl.NewRectangle(x+12, y+24, 18, 18), "Re-scan all lookups (already mined cards are skipped)", &rescan)
 	if rescan != s.RescanAll {
 		u.app.SetRescanAll(rescan)
 	}
 	setEnabled(!busy && s.VocabPath != "" && len(s.Profiles) > 0)
 	if rg.Button(rl.NewRectangle(w-pad-12-180, y+18, 180, rowHeight), "Mine cards") {
-		if u.langEdit {
-			u.langEdit = false
-			u.app.SetLanguages(u.langText)
-		}
 		u.app.Mine()
 	}
 	setEnabled(true)
@@ -309,8 +301,9 @@ func (u *ui) draw(s Snapshot) {
 	}
 	listView(rl.NewRectangle(x, y, inner, logHeight), lines, &u.logScroll, &u.logActive, &u.logFocus)
 
-	// Dropdowns are drawn last so they overlay other controls.
-	if len(s.Profiles) > 0 {
+	// Dropdowns are drawn last so they overlay other controls. The profile
+	// dropdown only appears when the settings export has several profiles.
+	if len(s.Profiles) > 1 {
 		if !u.profileEdit {
 			u.profileIndex = int32(s.ProfileIndex)
 		}

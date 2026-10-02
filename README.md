@@ -20,6 +20,9 @@ sources and duplicate rules, so they look like cards you mined by hand with Yomi
   including structured-content dictionaries, dictionary styles and dictionary images.
 * Downloads audio from the profile's audio sources (JapanesePod101, custom URL, custom JSON / local
   audio server, Jisho, LanguagePod101, Lingua Libre, Wiktionary).
+* Highlights every occurrence of the mined word in the sentence when your card format wraps
+  `{cloze-body}` in a tag (e.g. `{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}`). The same tag
+  highlights the word in `{sentence-furigana}` fields.
 * Never creates duplicates: words already in Anki (using the profile's duplicate scope) and words
   looked up several times are skipped.
 
@@ -43,14 +46,14 @@ Run `ann2html` and work through the window from top to bottom:
 
    Windows hides this folder in an odd way; if you can't find it, search the Kindle drive for
    `vocab.db`.
-2. **Import settings** (once, or again after changing Yomitan) and pick the profile to use.
+2. **Import settings** (once, or again after changing Yomitan). If your export has several profiles,
+   pick the one to use from the dropdown.
 3. **Import dictionaries** (once). A full collection export can take a few minutes. Importing a
    collection replaces all previously imported dictionaries. If you imported dictionaries with an
    earlier version of this app, re-import the collection (the window shows a warning): earlier
    versions lost pitch accents, frequencies and dictionary styles from recent Yomitan exports.
-4. Set the **languages** to mine (comma separated ISO 639 codes, e.g. `ja` or `ja,en`) and click
-   **Mine cards**. The window shows how many lookups were found, added, already in Anki, without a
-   definition, or failed.
+4. Click **Mine cards**. Only lookups in your Yomitan profile's language are mined. The window
+   shows how many lookups were found, added, already in Anki, without a definition, or failed.
 
 You can also drag and drop `vocab.db`, a settings export or dictionaries onto the window.
 

@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xythh/ann2html/internal/kindle"
 	"github.com/xythh/ann2html/internal/miner"
 	"github.com/xythh/ann2html/internal/store"
 	"github.com/xythh/ann2html/internal/yomitan/importer"
@@ -26,7 +25,6 @@ type App struct {
 	vocabPath string
 	export    *settings.Export
 	profile   string
-	languages string
 	rescanAll bool
 	dicts     []store.DictionaryInfo
 	stale     bool // dictionary data needs to be re-imported
@@ -47,7 +45,6 @@ type Snapshot struct {
 	ProfileIndex int
 	Deck, Model  string
 	Warnings     []string
-	Languages    string
 	RescanAll    bool
 	Dicts        []string
 	Busy         string
@@ -70,15 +67,12 @@ func NewApp() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &App{st: st, languages: "ja"}
+	a := &App{st: st}
 	a.vocabPath, _ = st.Get(store.KeyVocabPath)
 	if a.vocabPath == "" {
 		if p := filepath.Join(dataDir(), "vocab.db"); fileExists(p) {
 			a.vocabPath = p
 		}
-	}
-	if l, _ := st.Get(store.KeyLanguages); l != "" {
-		a.languages = l
 	}
 	a.profile, _ = st.Get(store.KeyActiveProfile)
 	if raw, _ := st.Get(store.KeyYomitanOptions); raw != "" {
@@ -119,7 +113,7 @@ func (a *App) Snapshot() Snapshot {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s := Snapshot{
-		VocabPath: a.vocabPath, Languages: a.languages, RescanAll: a.rescanAll,
+		VocabPath: a.vocabPath, RescanAll: a.rescanAll,
 		Busy: a.busy, Progress: a.progress, ProgressText: a.progressText,
 		Status: a.status, Log: append([]string(nil), a.log...),
 	}
@@ -160,6 +154,9 @@ func (a *App) Snapshot() Snapshot {
 	}
 	for _, d := range a.dicts {
 		line := fmt.Sprintf("%s  (%d terms)", d.Title, d.Terms)
+		if d.Terms == 0 && d.Meta > 0 {
+			line = fmt.Sprintf("%s  (%d frequency/pitch entries)", d.Title, d.Meta)
+		}
 		if a.export != nil && !enabled[d.Title] {
 			line += "  - not enabled in profile"
 		}
@@ -204,13 +201,6 @@ func (a *App) SetVocabPath(p string) {
 	a.mu.Unlock()
 	a.st.Set(store.KeyVocabPath, p)
 	a.logf("Using vocab.db: %s", p)
-}
-
-func (a *App) SetLanguages(l string) {
-	a.mu.Lock()
-	a.languages = l
-	a.mu.Unlock()
-	a.st.Set(store.KeyLanguages, l)
 }
 
 func (a *App) SetRescanAll(v bool) {
@@ -288,17 +278,10 @@ func (a *App) ImportDictionaries(paths []string) {
 func (a *App) Mine() {
 	a.mu.Lock()
 	cfg := miner.Config{Store: a.st, VocabPath: a.vocabPath, Settings: a.export, Profile: a.profile, RescanAll: a.rescanAll}
-	languages := a.languages
 	a.status = miner.Status{}
 	a.minerLogSeen = 0
 	a.mu.Unlock()
 
-	langs, err := kindle.ParseLanguages(languages)
-	if err != nil {
-		a.logf("%v", err)
-		return
-	}
-	cfg.Languages = langs
 	if cfg.VocabPath == "" {
 		a.logf("Select your vocab.db first")
 		return

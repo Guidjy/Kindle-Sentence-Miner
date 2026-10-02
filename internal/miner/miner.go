@@ -25,7 +25,6 @@ import (
 type Config struct {
 	Store     *store.Store
 	VocabPath string
-	Languages []string
 	RescanAll bool // ignore the saved timestamp; duplicates are still skipped
 	Settings  *settings.Export
 	Profile   string
@@ -45,14 +44,17 @@ type Status struct {
 }
 
 type run struct {
-	cfg        Config
-	format     *settings.CardFormat
-	profile    *settings.Profile
-	client     *anki.Client
-	lookup     *lookup.Lookup
-	audio      *audio.Downloader
-	renderer   render.Options
-	scanLength int
+	cfg      Config
+	format   *settings.CardFormat
+	profile  *settings.Profile
+	client   *anki.Client
+	lookup   *lookup.Lookup
+	audio    *audio.Downloader
+	renderer render.Options
+	// highlightOpen/Close are the tags the card format wraps around
+	// {cloze-body}; they also highlight the word in {sentence-furigana}.
+	highlightOpen, highlightClose string
+	scanLength                    int
 
 	mu       sync.Mutex
 	status   Status
@@ -146,13 +148,19 @@ func (r *run) run(ctx context.Context) error {
 	}
 
 	r.update(func(s *Status) { s.Phase = "Reading vocab.db" })
+	// Only lookups in the profile's language can be mined: the dictionaries
+	// and deinflection rules are for that language.
+	language := opts.General.Language
+	if language == "" {
+		language = "ja"
+	}
 	var since int64
 	if !cfg.RescanAll {
 		if since, err = cfg.Store.LastTimestamp(); err != nil {
 			return err
 		}
 	}
-	lookups, err := kindle.ReadLookups(cfg.VocabPath, since, cfg.Languages)
+	lookups, err := kindle.ReadLookups(cfg.VocabPath, since, []string{language})
 	if err != nil {
 		return err
 	}
@@ -175,6 +183,11 @@ func (r *run) run(ctx context.Context) error {
 		r.logf("Warning: enabled dictionaries not imported: %s", strings.Join(missing, ", "))
 	}
 	r.audio = audio.New(opts.Audio, opts.General.Language)
+	var templates []string
+	for _, f := range format.Fields {
+		templates = append(templates, f.Value)
+	}
+	r.highlightOpen, r.highlightClose = render.ClozeWrapper(templates...)
 	r.renderer = render.Options{
 		ResultOutputMode:   lookup.OptionsFromProfile(r.profile).ResultOutputMode,
 		GlossaryLayoutMode: opts.General.GlossaryLayoutMode,
@@ -429,7 +442,7 @@ func (r *run) newNote(lk kindle.Lookup, e *lookup.Entry, start int) *render.Note
 		query = lk.Surface
 	}
 	term, reading := noteHeadword(e)
-	return &render.Note{
+	n := &render.Note{
 		Entry: e,
 		Context: render.Context{
 			Sentence:       lk.Usage,
@@ -442,17 +455,20 @@ func (r *run) newNote(lk kindle.Lookup, e *lookup.Entry, start int) *render.Note
 		Media:     r.dictionaryMedia,
 		Audio:     func() (string, bool) { return r.termAudio(term, reading) },
 		RuleNames: r.lookup.RuleNames,
-		SentenceFurigana: func(plain bool) (string, bool) {
-			terms, ok := r.parseSentence(lk.Usage)
-			if !ok {
-				return "", false
-			}
-			if plain {
-				return render.FuriganaPlain(terms, term, reading), true
-			}
-			return render.FuriganaHTML(terms, term, reading), true
-		},
 	}
+	n.SentenceFurigana = func(plain bool) (string, bool) {
+		terms, ok := r.parseSentence(lk.Usage)
+		if !ok {
+			return "", false
+		}
+		// Highlight the word like the card's sentence field does.
+		h := render.Highlight{Words: n.HighlightWords(), Open: r.highlightOpen, Close: r.highlightClose}
+		if plain {
+			return render.FuriganaPlain(terms, term, reading, h), true
+		}
+		return render.FuriganaHTML(terms, term, reading, h), true
+	}
+	return n
 }
 
 // parseSentence splits a sentence into terms with furigana, once per sentence.

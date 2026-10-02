@@ -134,7 +134,7 @@ func exportFor(url string) *settings.Export {
 	 "dictionaries":[{"name":"JMdict","alias":"","enabled":true}],
 	 "anki":{"server":"` + url + `","tags":["kindle"],"duplicateScope":"collection","checkForDuplicates":true,
 	  "cardFormats":[{"type":"term","deck":"Mining","model":"Lapis","fields":{
-	   "Expression":{"value":"{expression}"},"Sentence":{"value":"{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}"},
+	   "Expression":{"value":"{expression}"},"Sentence":{"value":"{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}"},"SentenceFurigana":{"value":"{sentence-furigana}"},
 	   "Glossary":{"value":"{glossary}"},"Audio":{"value":"{audio}"}}}]},
 	 "audio":{"sources":[{"type":"custom","url":"` + url + `/audio/{term}"}]}}}]}}`))
 	if err != nil {
@@ -159,7 +159,7 @@ func TestRun(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	cfg := Config{Store: st, VocabPath: filepath.Join(dir, "vocab.db"), Languages: []string{"ja"}, Settings: exportFor(srv.URL)}
+	cfg := Config{Store: st, VocabPath: filepath.Join(dir, "vocab.db"), Settings: exportFor(srv.URL)}
 	status, err := Run(context.Background(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +175,9 @@ func TestRun(t *testing.T) {
 	}
 	if eat.Fields["Sentence"] != "寿司を<b>食べた</b>。" {
 		t.Errorf("sentence = %q", eat.Fields["Sentence"])
+	}
+	if want := `<span class="term">寿司を</span><span class="term"><b><ruby>食<rt>た</rt></ruby>べた</b></span><span class="term">。</span>`; eat.Fields["SentenceFurigana"] != want {
+		t.Errorf("sentence furigana = %q", eat.Fields["SentenceFurigana"])
 	}
 	if !strings.HasPrefix(eat.Fields["Audio"], "[sound:yomitan_audio_") || eat.DeckName != "Mining" || eat.Tags[0] != "kindle" {
 		t.Errorf("note = %+v", eat)

@@ -80,7 +80,6 @@ const (
 	KeyLastTimestamp  = "last_timestamp"
 	KeyActiveProfile  = "active_profile"
 	KeyYomitanOptions = "yomitan_settings_json"
-	KeyLanguages      = "languages"
 )
 
 type Store struct {
@@ -155,12 +154,14 @@ type DictionaryInfo struct {
 	Revision string
 	Styles   string
 	Terms    int64
+	Meta     int64 // frequency, pitch and IPA entries
 }
 
 // Dictionaries lists imported dictionaries with their term counts.
 func (s *Store) Dictionaries() ([]DictionaryInfo, error) {
 	rows, err := s.DB.Query(`SELECT d.id, d.title, d.revision, d.styles,
-		(SELECT COUNT(*) FROM terms t WHERE t.dict_id = d.id)
+		(SELECT COUNT(*) FROM terms t WHERE t.dict_id = d.id),
+		(SELECT COUNT(*) FROM term_meta m WHERE m.dict_id = d.id)
 		FROM dictionaries d ORDER BY d.title`)
 	if err != nil {
 		return nil, err
@@ -169,7 +170,7 @@ func (s *Store) Dictionaries() ([]DictionaryInfo, error) {
 	var out []DictionaryInfo
 	for rows.Next() {
 		var d DictionaryInfo
-		if err := rows.Scan(&d.ID, &d.Title, &d.Revision, &d.Styles, &d.Terms); err != nil {
+		if err := rows.Scan(&d.ID, &d.Title, &d.Revision, &d.Styles, &d.Terms, &d.Meta); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

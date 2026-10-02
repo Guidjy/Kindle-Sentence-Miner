@@ -168,10 +168,53 @@ func TestKebabCase(t *testing.T) {
 
 func TestFurigana(t *testing.T) {
 	terms := [][]japanese.Segment{{{Text: "「"}}, {{Text: "寿司", Reading: "すし"}}, {{Text: "を"}}, {{Text: "食", Reading: "た"}, {Text: "べた"}}}
-	if got, want := FuriganaHTML(terms, "", ""), `<span class="term">「</span><span class="term"><ruby>寿司<rt>すし</rt></ruby></span><span class="term">を</span><span class="term"><ruby>食<rt>た</rt></ruby>べた</span>`; got != want {
+	if got, want := FuriganaHTML(terms, "", "", Highlight{}), `<span class="term">「</span><span class="term"><ruby>寿司<rt>すし</rt></ruby></span><span class="term">を</span><span class="term"><ruby>食<rt>た</rt></ruby>べた</span>`; got != want {
 		t.Errorf("html = %s", got)
 	}
-	if got, want := FuriganaPlain(terms, "寿司", "おすし"), "「 寿司[おすし]を 食[た]べた"; got != want {
+	if got, want := FuriganaPlain(terms, "寿司", "おすし", Highlight{}), "「 寿司[おすし]を 食[た]べた"; got != want {
 		t.Errorf("plain = %s", got)
+	}
+}
+
+func TestHighlightAllOccurrences(t *testing.T) {
+	n := testNote("group")
+	n.Context = Context{Sentence: "食べる前に食べたのに、また食べた。", SentenceOffset: 5, OriginalText: "食べた"}
+	got := n.Field("{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}")
+	want := "<b>食べる</b>前に<b>食べた</b>のに、また<b>食べた</b>。"
+	if got != want {
+		t.Errorf("got %s\nwant %s", got, want)
+	}
+	// Without a wrapper around {cloze-body}, the output is Yomitan's.
+	if got := n.Field("{cloze-prefix}"); got != "食べる前に" {
+		t.Errorf("plain prefix = %s", got)
+	}
+}
+
+func TestFuriganaHighlight(t *testing.T) {
+	// 食べる前に食べた。 with both forms of the word present.
+	terms := [][]japanese.Segment{
+		{{Text: "食", Reading: "た"}, {Text: "べる"}}, {{Text: "前", Reading: "まえ"}}, {{Text: "に"}},
+		{{Text: "食", Reading: "た"}, {Text: "べた"}}, {{Text: "。"}},
+	}
+	h := Highlight{Words: []string{"食べた", "食べる"}, Open: "<b>", Close: "</b>"}
+	if got, want := FuriganaHTML(terms, "", "", h), `<span class="term"><b><ruby>食<rt>た</rt></ruby>べる</b></span><span class="term"><ruby>前<rt>まえ</rt></ruby></span><span class="term">に</span><span class="term"><b><ruby>食<rt>た</rt></ruby>べた</b></span><span class="term">。</span>`; got != want {
+		t.Errorf("html = %s", got)
+	}
+	if got, want := FuriganaPlain(terms, "", "", h), "<b> 食[た]べる</b> 前[まえ]に<b> 食[た]べた</b>。"; got != want {
+		t.Errorf("plain = %s", got)
+	}
+	// A term that only partly overlaps the word is not highlighted.
+	partial := [][]japanese.Segment{{{Text: "食べたい"}}}
+	if got := FuriganaPlain(partial, "", "", h); got != "食べたい" {
+		t.Errorf("partial = %s", got)
+	}
+}
+
+func TestClozeWrapper(t *testing.T) {
+	if o, c := ClozeWrapper("{expression}", `{cloze-prefix}<span class="hl">{cloze-body}</span>{cloze-suffix}`); o != `<span class="hl">` || c != "</span>" {
+		t.Errorf("wrapper = %q %q", o, c)
+	}
+	if o, _ := ClozeWrapper("{cloze-prefix}{cloze-body}{cloze-suffix}"); o != "" {
+		t.Errorf("unexpected wrapper %q", o)
 	}
 }

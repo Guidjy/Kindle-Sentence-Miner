@@ -7,7 +7,6 @@ require (
 	github.com/gen2brain/raylib-go/raygui v0.0.0-20260815042312-80156a59a482
 	github.com/gen2brain/raylib-go/raylib v0.60.1
 	github.com/ncruces/zenity v0.10.15
-	golang.org/x/text v0.40.0
 	modernc.org/sqlite v1.29.5
 )
 
@@ -30,6 +29,7 @@ require (
 	golang.org/x/exp v0.0.0-20260508232706-74f9aab9d74a // indirect
 	golang.org/x/image v0.44.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	modernc.org/gc/v3 v3.0.0-20240304020402-f0dba7c97c2b // indirect
 	modernc.org/libc v1.49.0 // indirect
 	modernc.org/mathutil v1.6.0 // indirect

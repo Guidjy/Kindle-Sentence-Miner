@@ -46,13 +46,3 @@ func TestReadLookups(t *testing.T) {
 		t.Errorf("want 3 lookups ordered by timestamp, got %+v", all)
 	}
 }
-
-func TestParseLanguages(t *testing.T) {
-	got, err := ParseLanguages(" ja, en ,")
-	if err != nil || len(got) != 2 {
-		t.Errorf("got %v %v", got, err)
-	}
-	if _, err := ParseLanguages("notalang"); err == nil {
-		t.Error("expected error")
-	}
-}
