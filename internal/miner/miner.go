@@ -156,13 +156,19 @@ func (r *run) run(ctx context.Context) error {
 	if language == "" {
 		language = "ja"
 	}
+	// Only lookups after the saved position are read, plus the ones that
+	// failed last time.
 	var since int64
+	var retry []string
 	if !cfg.RescanAll {
 		if since, err = cfg.Store.LastTimestamp(); err != nil {
 			return err
 		}
+		if retry, err = cfg.Store.RetryLookups(); err != nil {
+			return err
+		}
 	}
-	lookups, err := kindle.ReadLookups(cfg.VocabPath, since, []string{language})
+	lookups, err := kindle.ReadLookups(cfg.VocabPath, since, []string{language}, retry...)
 	if err != nil {
 		return err
 	}
@@ -170,6 +176,9 @@ func (r *run) run(ctx context.Context) error {
 	if len(lookups) == 0 {
 		r.logf("No new lookups in vocab.db")
 		return nil
+	}
+	if len(retry) > 0 {
+		r.logf("Retrying %d lookup(s) that failed last time", len(retry))
 	}
 
 	deinflector, err := deinflect.New()
@@ -203,22 +212,14 @@ func (r *run) run(ctx context.Context) error {
 		}
 	}
 
-	// maxHandled is the newest lookup dealt with; failedAt the oldest one that
-	// must be retried next run.
-	var tsMu sync.Mutex
-	var maxHandled int64
-	var failedAt int64 = -1
-	handled := func(ts int64) {
-		tsMu.Lock()
-		maxHandled = max(maxHandled, ts)
-		tsMu.Unlock()
-	}
-	failed := func(ts int64) {
-		tsMu.Lock()
-		if failedAt < 0 || ts < failedAt {
-			failedAt = ts
-		}
-		tsMu.Unlock()
+	// failedIDs are the lookups whose note could not be added; they are
+	// retried next run.
+	var failedMu sync.Mutex
+	var failedIDs []string
+	failed := func(lk kindle.Lookup) {
+		failedMu.Lock()
+		failedIDs = append(failedIDs, lk.ID)
+		failedMu.Unlock()
 	}
 
 	// 1. Look up every word and render the first field (the duplicate key).
@@ -234,13 +235,11 @@ func (r *run) run(ctx context.Context) error {
 			return err
 		}
 		if isMultiWordSelection(lk, entries, start) {
-			handled(lk.Timestamp)
 			r.logf("Skipped multi-word selection %q; mine it by hand from the sentences page", lk.Lemma)
 			r.update(func(s *Status) { s.Skipped++; s.Processed++ })
 			continue
 		}
 		if len(entries) == 0 {
-			handled(lk.Timestamp)
 			r.logf("No definition: %s", lk.Lemma)
 			r.update(func(s *Status) { s.NoDefinition++; s.Processed++ })
 			continue
@@ -249,7 +248,6 @@ func (r *run) run(ctx context.Context) error {
 		c.note = r.newNote(lk, c.entry, start)
 		c.firstVal = c.note.Field(format.Fields[0].Value)
 		if seen[c.firstVal] {
-			handled(lk.Timestamp)
 			r.update(func(s *Status) { s.Duplicates++; s.Processed++ })
 			continue
 		}
@@ -289,10 +287,8 @@ func (r *run) run(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			for c := range jobs {
-				if r.addNote(ctx, c) {
-					handled(c.lk.Timestamp)
-				} else {
-					failed(c.lk.Timestamp)
+				if !r.addNote(ctx, c) {
+					failed(c.lk)
 				}
 			}
 		}()
@@ -302,7 +298,6 @@ func (r *run) run(ctx context.Context) error {
 			break
 		}
 		if c.duplicate {
-			handled(c.lk.Timestamp)
 			r.update(func(s *Status) { s.Duplicates++; s.Processed++ })
 			continue
 		}
@@ -318,21 +313,22 @@ func (r *run) run(ctx context.Context) error {
 		// Cancelled: keep the saved position so nothing is skipped.
 		return err
 	}
-	// Advance the saved position. If anything failed, stop just before the
-	// earliest failure so it is retried next run; lookups after it will then
-	// be skipped as duplicates.
+	// Every lookup read has been dealt with: move the saved position past
+	// all of them, so already seen lookups are never read again, and
+	// remember the failed ones to retry them next run.
 	cur, err := cfg.Store.LastTimestamp()
 	if err != nil {
 		return err
 	}
-	target := maxHandled
-	if failedAt >= 0 {
-		target = failedAt - 1
+	if newest := lookups[len(lookups)-1].Timestamp; newest > cur {
+		if err := cfg.Store.SetLastTimestamp(newest); err != nil {
+			return err
+		}
 	}
-	if failedAt >= 0 || target > cur {
-		return cfg.Store.SetLastTimestamp(target)
+	if len(failedIDs) > 0 {
+		r.logf("%d note(s) could not be added; they will be retried next time", len(failedIDs))
 	}
-	return nil
+	return cfg.Store.SetRetryLookups(failedIDs)
 }
 
 func (r *run) ankiNote(fields map[string]string) anki.Note {

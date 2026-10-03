@@ -147,7 +147,7 @@ func exportFor(url string) *settings.Export {
 
 func TestRun(t *testing.T) {
 	dir, st := fixture(t)
-	fake := &fakeAnki{media: map[string]int{}, failOn: "本"}
+	fake := &fakeAnki{media: map[string]int{}, failOn: "猫"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/audio/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "猫") {
@@ -187,15 +187,19 @@ func TestRun(t *testing.T) {
 	if !strings.Contains(eat.Fields["Glossary"], "to eat") {
 		t.Errorf("glossary = %q", eat.Fields["Glossary"])
 	}
-	if len(fake.media) != 3 { // audio for 食べる and 本 (uploaded before its add failed), the cat image
+	if len(fake.media) != 3 { // audio for 食べる and 本, and the cat image (uploaded before 猫 failed)
 		t.Errorf("media = %v", fake.media)
 	}
-	// The failure at timestamp 50 must be retried next time.
-	if ts, _ := st.LastTimestamp(); ts != 49 {
-		t.Errorf("last timestamp = %d, want 49", ts)
+	// The saved position moves past every lookup read, even though 猫 (an
+	// older lookup) failed; 猫 alone is retried next time.
+	if ts, _ := st.LastTimestamp(); ts != 50 {
+		t.Errorf("last timestamp = %d, want 50", ts)
+	}
+	if ids, _ := st.RetryLookups(); len(ids) != 1 || ids[0] != "3" {
+		t.Errorf("retry = %v, want [3]", ids)
 	}
 
-	// Second run: Anki works again; only the failed note is new.
+	// Second run: Anki works again; only the failed lookup is read.
 	fake.failOn = ""
 	status, err = Run(context.Background(), cfg, nil)
 	if err != nil {
@@ -206,6 +210,15 @@ func TestRun(t *testing.T) {
 	}
 	if ts, _ := st.LastTimestamp(); ts != 50 {
 		t.Errorf("last timestamp = %d, want 50", ts)
+	}
+	if ids, _ := st.RetryLookups(); len(ids) != 0 {
+		t.Errorf("retry after success = %v", ids)
+	}
+
+	// Third run: nothing new, nothing is read again.
+	status, err = Run(context.Background(), cfg, nil)
+	if err != nil || status.Total != 0 {
+		t.Fatalf("third run status = %+v, err = %v", status, err)
 	}
 
 	// Rescan: everything is already in Anki.

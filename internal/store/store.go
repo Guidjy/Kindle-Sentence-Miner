@@ -4,6 +4,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -78,6 +79,7 @@ CREATE INDEX IF NOT EXISTS tag_meta_name ON tag_meta(dict_id, name);
 const (
 	KeyVocabPath      = "vocab_path"
 	KeyLastTimestamp  = "last_timestamp"
+	KeyRetryLookups   = "retry_lookups"
 	KeyActiveProfile  = "active_profile"
 	KeyYomitanOptions = "yomitan_settings_json"
 )
@@ -141,6 +143,29 @@ func (s *Store) LastTimestamp() (int64, error) {
 		return 0, err
 	}
 	return strconv.ParseInt(v, 10, 64)
+}
+
+// RetryLookups returns the ids of Kindle lookups whose notes could not be
+// added in the last mining run.
+func (s *Store) RetryLookups() ([]string, error) {
+	v, err := s.Get(KeyRetryLookups)
+	if err != nil || v == "" {
+		return nil, err
+	}
+	var ids []string
+	err = json.Unmarshal([]byte(v), &ids)
+	return ids, err
+}
+
+func (s *Store) SetRetryLookups(ids []string) error {
+	if ids == nil {
+		ids = []string{}
+	}
+	b, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	return s.Set(KeyRetryLookups, string(b))
 }
 
 func (s *Store) SetLastTimestamp(ts int64) error {

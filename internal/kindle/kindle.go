@@ -62,9 +62,9 @@ func Validate(dbPath string) error {
 	return db.Close()
 }
 
-// ReadLookups returns lookups newer than since (unix ms), oldest first,
-// restricted to langs when it is non-empty.
-func ReadLookups(dbPath string, since int64, langs []string) ([]Lookup, error) {
+// ReadLookups returns lookups newer than since (unix ms), plus the lookups
+// with the given ids, oldest first, restricted to langs when it is non-empty.
+func ReadLookups(dbPath string, since int64, langs []string, ids ...string) ([]Lookup, error) {
 	db, err := open(dbPath)
 	if err != nil {
 		return nil, err
@@ -76,8 +76,15 @@ func ReadLookups(dbPath string, since int64, langs []string) ([]Lookup, error) {
 		FROM LOOKUPS l
 		JOIN WORDS w ON w.id = l.word_key
 		LEFT JOIN BOOK_INFO b ON b.id = l.book_key
-		WHERE l.timestamp > ?`
+		WHERE (l.timestamp > ?`
 	args := []any{since}
+	if len(ids) > 0 {
+		q += ` OR l.id IN (?` + strings.Repeat(",?", len(ids)-1) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	q += `)`
 	if len(langs) > 0 {
 		q += ` AND w.lang IN (?` + strings.Repeat(",?", len(langs)-1) + `)`
 		for _, l := range langs {
