@@ -2,7 +2,9 @@ package kindle
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +63,30 @@ func TestMaybeSelection(t *testing.T) {
 		if got := c.lk.MaybeSelection(); got != c.want {
 			t.Errorf("%s/%s: got %v", c.lk.Lemma, c.lk.Surface, got)
 		}
+	}
+}
+
+func TestValidate(t *testing.T) {
+	// A SQLite database that is not a vocab.db (like the app's own ann2html.db),
+	// in a folder with non-ASCII characters and spaces.
+	dir := filepath.Join(t.TempDir(), "Área de Trabalho")
+	os.MkdirAll(dir, 0o755)
+	p := filepath.Join(dir, "ann2html.db")
+	db, _ := sql.Open("sqlite", p)
+	db.Exec(`CREATE TABLE settings(key TEXT, value TEXT)`)
+	db.Close()
+	if err := Validate(p); err == nil || !strings.Contains(err.Error(), "not a Kindle Vocabulary Builder database") {
+		t.Errorf("Validate(ann2html.db) = %v", err)
+	}
+	if _, err := ReadLookups(p, 0, nil); err == nil || !strings.Contains(err.Error(), "not a Kindle") {
+		t.Errorf("ReadLookups(ann2html.db) = %v", err)
+	}
+
+	v := filepath.Join(dir, "vocab[1].db")
+	db, _ = sql.Open("sqlite", v)
+	db.Exec(`CREATE TABLE WORDS (id TEXT, word TEXT, stem TEXT, lang TEXT); CREATE TABLE LOOKUPS (id TEXT, word_key TEXT, book_key TEXT, usage TEXT, timestamp INTEGER); CREATE TABLE BOOK_INFO (id TEXT, title TEXT);`)
+	db.Close()
+	if err := Validate(v); err != nil {
+		t.Errorf("Validate(vocab.db) = %v", err)
 	}
 }

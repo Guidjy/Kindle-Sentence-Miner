@@ -27,9 +27,8 @@ type Lookup struct {
 	BookTitle string
 }
 
-// ReadLookups returns lookups newer than since (unix ms), oldest first,
-// restricted to langs when it is non-empty.
-func ReadLookups(dbPath string, since int64, langs []string) ([]Lookup, error) {
+// open opens a Kindle vocab.db read-only, checking that it really is one.
+func open(dbPath string) (*sql.DB, error) {
 	if info, err := os.Stat(dbPath); err != nil || info.IsDir() {
 		return nil, errors.New("vocab.db was not found")
 	}
@@ -42,6 +41,31 @@ func ReadLookups(dbPath string, since int64, langs []string) ([]Lookup, error) {
 		u.Path = "/" + u.Path
 	}
 	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, err
+	}
+	var tables int
+	err = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('LOOKUPS', 'WORDS')`).Scan(&tables)
+	if err != nil || tables != 2 {
+		db.Close()
+		return nil, fmt.Errorf("%s is not a Kindle Vocabulary Builder database (vocab.db); select the vocab.db from your Kindle's system/vocabulary folder", filepath.Base(dbPath))
+	}
+	return db, nil
+}
+
+// Validate checks that dbPath is a Kindle Vocabulary Builder database.
+func Validate(dbPath string) error {
+	db, err := open(dbPath)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+}
+
+// ReadLookups returns lookups newer than since (unix ms), oldest first,
+// restricted to langs when it is non-empty.
+func ReadLookups(dbPath string, since int64, langs []string) ([]Lookup, error) {
+	db, err := open(dbPath)
 	if err != nil {
 		return nil, err
 	}

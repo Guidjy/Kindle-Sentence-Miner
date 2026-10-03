@@ -78,6 +78,11 @@ func NewApp() (*App, error) {
 	}
 	a := &App{st: st}
 	a.vocabPath, _ = st.Get(store.KeyVocabPath)
+	if a.vocabPath != "" && kindle.Validate(a.vocabPath) != nil {
+		// The saved file is missing or is not a vocab.db (e.g. ann2html.db
+		// was selected by mistake); ask for it again.
+		a.vocabPath = ""
+	}
 	if a.vocabPath == "" {
 		if p := filepath.Join(dataDir(), "vocab.db"); fileExists(p) {
 			a.vocabPath = p
@@ -205,6 +210,10 @@ func (a *App) Cancel() {
 }
 
 func (a *App) SetVocabPath(p string) {
+	if err := kindle.Validate(p); err != nil {
+		a.logf("%v", err)
+		return
+	}
 	a.mu.Lock()
 	a.vocabPath = p
 	a.mu.Unlock()

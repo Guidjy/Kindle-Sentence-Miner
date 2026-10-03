@@ -112,7 +112,10 @@ func (u *ui) dialog(fn func()) {
 func (u *ui) selectVocab() {
 	u.dialog(func() {
 		p, err := zenity.SelectFile(zenity.Title("Select your Kindle's vocab.db"),
-			zenity.FileFilters{{Name: "Kindle vocabulary database", Patterns: []string{"*.db"}, CaseFold: true}})
+			zenity.FileFilters{
+				{Name: "Kindle vocabulary database", Patterns: []string{"vocab*.db"}, CaseFold: true},
+				{Name: "All databases", Patterns: []string{"*.db"}, CaseFold: true},
+			})
 		if err == nil {
 			u.app.SetVocabPath(p)
 		}
