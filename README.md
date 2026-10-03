@@ -4,11 +4,15 @@ Turns the words you look up on your Kindle into Anki cards, automatically. The c
 Yomitan setup: the same deck, note type, field markers, dictionaries (in the same order), audio
 sources and duplicate rules, so they look like cards you mined by hand with Yomitan.
 
+![GUI](/kindle_sentence_miner_gui.png)
+
+![web](/kindle_sentence_miner_web.png)
+
 ## Features
-* Small desktop GUI, a single portable executable; nothing to install.
 * Reads your Kindle's `vocab.db` (Vocabulary Builder) and only mines lookups made since the last run.
 * Imports your Yomitan settings export and your dictionaries (the "dictionary collection" export, or
   individual Yomitan dictionary `.zip` files) into a local SQLite database indexed for fast lookups.
+* Small desktop GUI, a single portable executable; nothing to install.
 * Looks words up the way Yomitan does when you hover them: it finds the word in its sentence, scans
   from there with Yomitan's own deinflection rules (run in an embedded JavaScript engine), and uses
   the enabled dictionaries in profile order, the profile's result grouping mode (group / split /
