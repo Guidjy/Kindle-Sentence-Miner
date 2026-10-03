@@ -25,6 +25,8 @@ sources and duplicate rules, so they look like cards you mined by hand with Yomi
   highlights the word in `{sentence-furigana}` fields.
 * Never creates duplicates: words already in Anki (using the profile's duplicate scope) and words
   looked up several times are skipped.
+* Can still generate the original ann2html sentences page (`edit.html`) for mining by hand with
+  Yomitan in your browser.
 
 ## Before you start
 1. Install the [AnkiConnect](https://ankiweb.net/shared/info/2055492159) add-on and keep Anki open
@@ -53,17 +55,19 @@ Run `ann2html` and work through the window from top to bottom:
    earlier version of this app, re-import the collection (the window shows a warning): earlier
    versions lost pitch accents, frequencies and dictionary styles from recent Yomitan exports.
 4. Click **Mine cards**. Only lookups in your Yomitan profile's language are mined. The window
-   shows how many lookups were found, added, already in Anki, without a definition, or failed.
+   shows how many lookups were found, added, already in Anki, without a definition, skipped as
+   multi-word selections, or failed. The log lists what happened to each word.
 
 You can also drag and drop `vocab.db`, a settings export or dictionaries onto the window.
 
 To mine by hand instead, click **Open sentences page**. It writes `edit.html` next to the executable
 (the original ann2html page: every lookup's sentence with the word in bold, oldest first) and opens
 it in your browser, where you can mine with Yomitan as usual. Press `b` on the page to bookmark your
-position; new lookups are added at the end, so the bookmark stays valid. This only needs
-`vocab.db`, not the Yomitan settings or dictionaries.
+position. The page always lists every lookup in `vocab.db` (it does not skip ones you already saw), so
+new lookups are added at the end and the bookmark stays valid. This only needs `vocab.db`, not the
+Yomitan settings or dictionaries.
 
-The app remembers where it stopped: the next run only looks at new lookups. If adding a card fails
+When mining cards, the app remembers where it stopped: the next run only looks at new lookups. If adding a card fails
 (for example Anki was closed), that lookup is retried on the next run. Tick **Re-scan all lookups** to
 go through the whole `vocab.db` again, for example after importing a new dictionary; cards already in
 Anki are still skipped.
@@ -109,5 +113,6 @@ go test ./...         # or: make test
 compiler set in `CC`.
 
 ## License
-GPL-3.0. The card rendering ports parts of [Yomitan](https://github.com/yomidevs/yomitan) (GPL-3.0).
+GPL-3.0. The card rendering ports parts of [Yomitan](https://github.com/yomidevs/yomitan) (GPL-3.0),
+and Yomitan's deinflection rules are embedded unchanged and run with [goja](https://github.com/dop251/goja).
 The bundled M PLUS 1p font is licensed under the SIL Open Font License (`assets/OFL.txt`).
