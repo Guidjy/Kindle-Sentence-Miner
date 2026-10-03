@@ -6,6 +6,8 @@ sources and duplicate rules, so they look like cards you mined by hand with Yomi
 
 ![GUI](/kindle_sentence_miner_gui.png)
 
+You can also generate a web page and mine the sentences manually, if you like.
+
 ![web](/kindle_sentence_miner_web.png)
 
 ## Features
